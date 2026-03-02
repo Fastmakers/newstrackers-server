@@ -20,6 +20,7 @@ class Settings(BaseSettings):
 
     # OpenAI API (쿼리 임베딩 생성용 — text-embedding-3-small)
     OPENAI_API_KEY: str = ""
+    OPENAI_CHAT_MODEL: str = "gpt-4o-mini"
 
     # PostgreSQL (pgvector)
     DATABASE_URL: str = "postgresql://postgres:postgres@localhost:5432/newstracker"
@@ -36,6 +37,7 @@ class Settings(BaseSettings):
         "에너지 환경",
         "자동차 모빌리티",
         "건설 부동산",
+        "방산",
     ]
 
 
