@@ -9,7 +9,7 @@ EMBEDDING_MODEL = "text-embedding-3-small"
 
 
 class VectorStoreService:
-    """pgvector 기반 Vector Store 서비스 (news_article_embeddings 테이블 사용)"""
+    """pgvector 기반 Vector Store 서비스 (news_chunks/news_articles 테이블 사용)"""
 
     def __init__(self):
         self._pool: asyncpg.Pool | None = None
@@ -43,29 +43,66 @@ class VectorStoreService:
         job_category: str | None = None,
         n_results: int = 10,
     ) -> list[dict]:
-        """코사인 유사도 기반 뉴스 검색 (news_article_embeddings 테이블)"""
+        """코사인 유사도 기반 뉴스 검색 (news_chunks + news_articles 조인)"""
         query_embedding = await self._embed(query)
 
-        sql = """
-            SELECT id, content, doc_title, doc_source, doc_published, doc_class_code,
-                   embedding <=> $1::vector AS distance
-            FROM news_article_embeddings
-            ORDER BY distance
-            LIMIT $2
-        """
-
         async with self._pool.acquire() as conn:
-            rows = await conn.fetch(sql, query_embedding, n_results)
+            if job_category:
+                sql = """
+                    SELECT
+                        nc.id AS chunk_id,
+                        nc.chunk_text,
+                        na.id AS article_id,
+                        na.title,
+                        na.article_url,
+                        na.category_l1,
+                        na.category_l2,
+                        na.category_l3,
+                        na.published_at,
+                        nc.embedding <=> $1::vector AS distance
+                    FROM news_chunks nc
+                    JOIN news_articles na ON na.id = nc.article_id
+                    WHERE
+                        na.category_l1 ILIKE $2
+                        OR na.category_l2 ILIKE $2
+                        OR na.category_l3 ILIKE $2
+                    ORDER BY distance
+                    LIMIT $3
+                """
+                rows = await conn.fetch(sql, query_embedding, f"%{job_category}%", n_results)
+            else:
+                sql = """
+                    SELECT
+                        nc.id AS chunk_id,
+                        nc.chunk_text,
+                        na.id AS article_id,
+                        na.title,
+                        na.article_url,
+                        na.category_l1,
+                        na.category_l2,
+                        na.category_l3,
+                        na.published_at,
+                        nc.embedding <=> $1::vector AS distance
+                    FROM news_chunks nc
+                    JOIN news_articles na ON na.id = nc.article_id
+                    ORDER BY distance
+                    LIMIT $2
+                """
+                rows = await conn.fetch(sql, query_embedding, n_results)
 
         return [
             {
-                "id": str(row["id"]),
-                "document": row["content"],
+                "id": str(row["chunk_id"]),
+                "article_id": str(row["article_id"]),
+                "document": row["chunk_text"],
                 "metadata": {
-                    "title": row["doc_title"],
-                    "url": row["doc_source"],
-                    "job_category": row["doc_class_code"],
-                    "published_at": row["doc_published"],
+                    "title": row["title"],
+                    "url": row["article_url"],
+                    "job_category": row["category_l1"] or row["category_l2"] or row["category_l3"],
+                    "category_l1": row["category_l1"],
+                    "category_l2": row["category_l2"],
+                    "category_l3": row["category_l3"],
+                    "published_at": row["published_at"],
                 },
                 "distance": float(row["distance"]),
             }
@@ -75,9 +112,11 @@ class VectorStoreService:
     async def get_stats(self) -> dict:
         """Vector DB 통계 정보"""
         async with self._pool.acquire() as conn:
-            count = await conn.fetchval("SELECT count(*) FROM news_article_embeddings")
+            article_count = await conn.fetchval("SELECT count(*) FROM news_articles")
+            chunk_count = await conn.fetchval("SELECT count(*) FROM news_chunks")
         return {
-            "total_documents": count,
+            "total_articles": article_count,
+            "total_chunks": chunk_count,
         }
 
 
