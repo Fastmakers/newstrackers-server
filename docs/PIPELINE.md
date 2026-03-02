@@ -1,0 +1,318 @@
+# 뉴스 기사 처리 파이프라인
+
+매일경제 뉴스 기사 한 건이 RAG 검색 결과로 나오기까지 거치는 모든 단계를 기록한다.
+
+---
+
+## 전체 흐름
+
+```
+[DB: news_articles]  187,884건
+        │
+        ▼
+┌─────────────────────────────────────┐
+│  Phase 1. 데이터 품질 필터링          │  (오프라인 배치 스크립트)
+│  - TextCleaner                      │
+│  - LexicalDiversityAnalyzer         │
+└─────────────────────────────────────┘
+        │  정상 기사 ~172,847건 (92%)
+        ▼
+┌─────────────────────────────────────┐
+│  Phase 2. NLP 분석 (오프라인 배치)    │
+│  - NgramExtractor (TF-IDF)          │
+│  - NerExtractor (NER/POS)           │
+└─────────────────────────────────────┘
+        │  data/ngrams.json, data/ner_result.json
+        ▼
+┌─────────────────────────────────────┐
+│  Phase 3. 벡터 임베딩 (이미 완료)     │  (news_chunks 테이블)
+│  - text-embedding-3-small (1536d)   │
+│  - chunk_version = v1_1000_180      │
+└─────────────────────────────────────┘
+        │  news_chunks 335,073건
+        ▼
+┌─────────────────────────────────────┐
+│  Phase 4. 하이브리드 검색 (실시간)    │  (사용자 쿼리 입력 시)
+│  - 벡터 검색 100건                   │
+│  + 키워드 검색 100건                 │
+│  → RRF 융합 → 100건                 │
+│  → [Cross-Encoder 리랭킹 미구현]     │
+└─────────────────────────────────────┘
+        │  top-K 청크
+        ▼
+┌─────────────────────────────────────┐
+│  Phase 5. LLM 분석 (실시간)          │
+│  - IndustryAnalyzer                 │
+│  - CompanyAnalyzer                  │
+└─────────────────────────────────────┘
+        │
+        ▼
+    API 응답 (JSON)
+```
+
+---
+
+## Phase 1. 데이터 품질 필터링
+
+### 1-1. TextCleaner — `app/analysis/text_cleaner.py`
+
+기사 본문에서 내용과 무관한 노이즈를 Regex로 제거한다.
+
+| 제거 대상 | 예시 |
+|---|---|
+| 이메일 주소 | `reporter@mk.co.kr` |
+| URL | `https://www.mk.co.kr/news/123` |
+| 저작권 고지 | `ⓒ 매일경제 & mk.co.kr, 무단전재 및 재배포 금지` |
+| 사진 출처 태그 | `[사진 = 연합뉴스]`, `[사진출처=게티이미지]` |
+| 통신사 태그 | `[AP=연합뉴스]`, `[매경DB]` |
+| 기자 바이라인 | `홍길동 기자`, `홍길동 특파원` |
+| 중복 공백·개행 | `단어1   단어2` → `단어1 단어2` |
+
+**적용 시점**: `LexicalDiversityAnalyzer`, `NgramExtractor`, `NerExtractor` 내부에서 자동 호출됨.
+
+---
+
+### 1-2. LexicalDiversityAnalyzer — `app/analysis/lexical_diversity.py`
+
+kiwipiepy로 명사를 추출한 뒤 **LogTTR (Herdan's C)** 을 계산해 노이즈 기사를 탐지한다.
+
+```
+LogTTR = log(고유 단어 수) / log(전체 단어 수)
+```
+
+길이가 길어질수록 TTR(Type-Token Ratio)이 떨어지는 편향을 로그 스케일로 보정한다.
+
+**노이즈 분류 규칙:**
+
+| 조건 | 분류 | 이유 |
+|---|---|---|
+| 명사 토큰 < 50개 | 노이즈 (토큰 부족) | 단신·포토 캡션·헤드라인 나열 |
+| 고유 단어 = 1개 | 노이즈 (어휘 단일화) | 완전 반복 스팸 |
+| LogTTR < 0.82 | 노이즈 (반복 패턴) | 브랜드지수 나열, 증권 시황 반복 |
+| LogTTR > 0.99 | 노이즈 (파싱 오류) | [포토] 기사, 해시값, 극단 단신 |
+
+**매경 2025 실측 분포:**
+- mean = 0.9096, std = 0.0248
+- 정상 범위: 0.82 ~ 0.99 (전체의 91.3%)
+- 노이즈: 15,037건 (8.7%)
+  - 토큰 부족 (포토·단신): 14,614건
+  - 반복 패턴: ~423건
+
+**실행 스크립트:**
+```bash
+python scripts/analyze_lexical_diversity.py --all --save
+# → data/lexical_diversity.json (noise_article_ids 포함)
+```
+
+---
+
+## Phase 2. NLP 분석 (오프라인 배치)
+
+### 2-1. NgramExtractor — `app/analysis/ngram_extractor.py`
+
+kiwipiepy 명사 추출 → scikit-learn **TfidfVectorizer** → 카테고리별 핵심 키워드.
+
+**설계 파라미터 (`NgramConfig`):**
+
+| 파라미터 | 기본값 | 의미 |
+|---|---|---|
+| `max_features` | 1000 | 상위 N개 키워드만 추출 |
+| `ngram_range` | (1, 2) | 단어 + 바이그램 |
+| `min_df` | 5 | 최소 5개 기사에서 등장해야 유효 |
+| `use_tfidf` | True | False면 단순 빈도(CountVectorizer) |
+
+**단어 vs 바이그램 차이:**
+
+| 단어 (1-gram) | 바이그램 (2-gram) |
+|---|---|
+| `인공지능` | `인공지능 서버` |
+| `반도체` | `반도체 수출` |
+| `금리` | `금리 인상` |
+
+바이그램이 산업 맥락을 훨씬 정확하게 포착한다.
+
+**실행 스크립트:**
+```bash
+python scripts/extract_ngrams.py --category 경제 --n 10000 --save
+python scripts/extract_ngrams.py --all --save
+# → data/ngrams.json
+```
+
+---
+
+### 2-2. NerExtractor — `app/analysis/ner_extractor.py`
+
+kiwipiepy POS 태그 + 휴리스틱 규칙으로 개체명을 분류한다.
+
+**POS 태그 → 개체 유형 분류 흐름:**
+
+```
+NNP(고유명사) 토큰
+    │
+    ├─ 알려진 지명 목록에 있음 (미국, 서울, ...) → LOC
+    ├─ ~국/시/구/도 접미어                       → LOC
+    ├─ 뒤 토큰이 회장/장관/교수/대표 등           → PERSON
+    ├─ ~전자/은행/그룹/협회 등 ORG 접미어         → ORG
+    └─ 나머지                                   → MISC
+```
+
+**동사(산업 동인) 추출:**
+
+```
+VV 태그                      → "오르다", "하락하다"
+NNG + XSV("하") 복합동사      → "급증하다", "발표하다", "합병하다"
+```
+
+**실행 스크립트:**
+```bash
+python scripts/extract_ner.py --category 경제 --n 5000
+python scripts/extract_ner.py --all --save
+# → data/ner_result.json
+```
+
+---
+
+## Phase 3. 벡터 임베딩 (이미 완료)
+
+기사 본문을 청크로 분할 후 OpenAI `text-embedding-3-small`로 임베딩.
+
+| 항목 | 값 |
+|---|---|
+| 임베딩 모델 | `text-embedding-3-small` |
+| 벡터 차원 | 1536 |
+| 청크 전략 | 1000자 / 180자 오버랩 (`v1_1000_180`) |
+| chunk_no=0 형식 | `"제목: {title}\n\n{body_start}"` |
+| 총 청크 수 | 335,073건 |
+
+**관련 파일:**
+- `app/db/models.py` — NewsChunkDB (SQLAlchemy ORM)
+- `app/db/repositories/news_repository.py` — 청크 검색 쿼리
+
+---
+
+## Phase 4. 하이브리드 검색 (실시간)
+
+사용자가 검색어를 입력하면 실시간으로 실행된다.
+
+### `NewsService.hybrid_search(query, category_l2, top_k)`
+
+```
+사용자 쿼리
+    │
+    ├─── Stage 1A: 벡터 검색 (pgvector cosine distance)
+    │       embedding(query) <=> chunk.embedding
+    │       → 100건
+    │
+    ├─── Stage 1B: 키워드 검색 (ILIKE)
+    │       chunk_text ILIKE '%query%'
+    │       → 100건
+    │
+    ▼
+    Stage 2: RRF 융합 (app/services/search/rrf.py)
+        score(d) = Σ 1/(k=60 + rank_i)
+        → 100건 (두 결과의 순위 기반 점수 합산)
+    │
+    ▼
+    Stage 3: Cross-Encoder 리랭킹 [미구현]
+        BAAI/bge-reranker-m3
+    │
+    ▼
+    top_k 청크 반환
+```
+
+**관련 파일:**
+- `app/services/news_service.py` — `hybrid_search()`
+- `app/services/search/rrf.py` — RRF 융합 알고리즘
+- `app/db/repositories/news_repository.py` — `search_similar_chunks()`, `search_chunks_by_keyword()`
+
+---
+
+## Phase 5. LLM 분석 (실시간)
+
+검색된 청크를 컨텍스트로 Claude에게 분석을 요청한다.
+
+### IndustryAnalyzer — `app/analysis/industry_analyzer.py`
+
+```
+hybrid_search 결과 (뉴스 청크)
+    │
+    ├─ 키워드 추출 (LLM)
+    ├─ 월별 감정 분석 (heuristic + LLM)
+    └─ 산업 트렌드 요약 (LLM)
+        → IndustryData 반환
+```
+
+### CompanyAnalyzer — `app/analysis/company_analyzer.py`
+
+```
+hybrid_search 결과 (뉴스 청크)
+    │
+    ├─ SWOT 분석 (LLM)
+    ├─ 5차원 레이더 점수 (heuristic)
+    ├─ 최근 뉴스 테마 추출 (LLM)
+    └─ 면접 Q&A 생성 (LLM)
+        → CompanyAnalysis 반환
+```
+
+**LLM 모델:** `claude-sonnet-4-6`
+
+---
+
+## 아키텍처 레이어 요약
+
+```
+사용자 요청
+    │
+    ▼
+FastAPI (app/api/v1/endpoints/)
+    │
+    ▼
+Service Layer (app/services/)
+    ├── NewsService        — 뉴스 검색
+    └── LLMService         — Claude API 호출
+    │
+    ▼
+Analysis Layer (app/analysis/)
+    ├── IndustryAnalyzer   — 산업 분석
+    ├── CompanyAnalyzer    — 기업 분석
+    ├── LexicalDiversityAnalyzer — 데이터 품질
+    ├── NgramExtractor     — TF-IDF 키워드
+    ├── NerExtractor       — NER/POS
+    └── TextCleaner        — 텍스트 정제
+    │
+    ▼
+Repository Layer (app/db/repositories/)
+    └── NewsRepository     — SQL 쿼리 캡슐화
+    │
+    ▼
+DB Layer (app/db/)
+    ├── models.py          — SQLAlchemy ORM
+    └── adapters/          — DB Row → Domain 변환
+    │
+    ▼
+PostgreSQL (AWS RDS)
+    ├── news_articles      — 187,884건
+    └── news_chunks        — 335,073건 (pgvector)
+```
+
+---
+
+## 파일 목록
+
+| 파일 | 역할 |
+|---|---|
+| `app/analysis/text_cleaner.py` | Regex 노이즈 제거 |
+| `app/analysis/lexical_diversity.py` | LogTTR 노이즈 탐지 |
+| `app/analysis/ngram_extractor.py` | TF-IDF N-gram 키워드 |
+| `app/analysis/ner_extractor.py` | NER + POS 동사 추출 |
+| `app/analysis/industry_analyzer.py` | 산업 동향 분석 (LLM) |
+| `app/analysis/company_analyzer.py` | 기업 분석 (LLM) |
+| `app/services/news_service.py` | 하이브리드 검색 |
+| `app/services/search/rrf.py` | RRF 융합 |
+| `app/db/repositories/news_repository.py` | DB 쿼리 |
+| `scripts/analyze_lexical_diversity.py` | LogTTR 배치 분석 |
+| `scripts/extract_ngrams.py` | TF-IDF 배치 추출 |
+| `scripts/extract_ner.py` | NER 배치 추출 |
+| `data/lexical_diversity.json` | 노이즈 기사 ID 목록 |
+| `data/ngrams.json` | 카테고리별 키워드 |
+| `data/ner_result.json` | ORG·PERSON·LOC·동사 |
