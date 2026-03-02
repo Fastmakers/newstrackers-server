@@ -5,6 +5,7 @@ __pycache__/
 .venv/
 venv/
 env/
+pdf/
 
 # Environment
 .env
@@ -54,3 +55,7 @@ logs/
 
 # Data
 data/
+
+# Local upload/output artifacts
+*.pdf
+*.json
