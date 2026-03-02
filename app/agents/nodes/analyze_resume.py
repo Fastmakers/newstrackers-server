@@ -1,4 +1,5 @@
 import json
+import time
 
 from app.agents.state import AnalysisState
 from app.core.config import settings
@@ -12,6 +13,8 @@ async def analyze_resume(state: AnalysisState) -> AnalysisState:
     자소서 텍스트에서 지원 직무, 산업, 회사, 스킬, 경험을 추출합니다.
     """
     industries = ", ".join(settings.INDUSTRY_KEYWORDS)
+    started_at = time.perf_counter()
+    timings = dict(state.get("node_timings_ms") or {})
 
     try:
         prompt = (
@@ -41,9 +44,21 @@ async def analyze_resume(state: AnalysisState) -> AnalysisState:
         profile.setdefault("skills", [])
         profile.setdefault("experiences", [])
 
-        print(f"[Node 1] 자소서 분석 완료: {profile['job_title']} / {profile['industry']}")
-        return {**state, "resume_profile": profile}
+        # 사용자 입력값이 있으면 LLM 추출값보다 우선 적용
+        user_profile_input = state.get("user_profile_input") or {}
+        for key in ("job_title", "industry", "company"):
+            value = user_profile_input.get(key)
+            if value:
+                profile[key] = value
+
+        timings["node1_analyze_resume"] = round((time.perf_counter() - started_at) * 1000, 2)
+        print(
+            f"[Node 1] 자소서 분석 완료: {profile['job_title']} / {profile['industry']} "
+            f"({timings['node1_analyze_resume']}ms)"
+        )
+        return {**state, "resume_profile": profile, "node_timings_ms": timings}
 
     except Exception as e:
         print(f"[Node 1] 자소서 분석 실패: {e}")
-        return {**state, "error": f"자소서 분석 실패: {e}"}
+        timings["node1_analyze_resume"] = round((time.perf_counter() - started_at) * 1000, 2)
+        return {**state, "error": f"자소서 분석 실패: {e}", "node_timings_ms": timings}

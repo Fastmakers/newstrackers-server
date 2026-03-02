@@ -1,4 +1,5 @@
 import json
+import time
 
 from app.agents.state import AnalysisState
 from app.services.claude_llm import claude_llm_service
@@ -13,6 +14,8 @@ async def generate_report(state: AnalysisState) -> AnalysisState:
     """
     if state.get("error"):
         return state
+    started_at = time.perf_counter()
+    timings = dict(state.get("node_timings_ms") or {})
 
     profile = state["resume_profile"]
     relevance_analysis = state.get("relevance_analysis", "")
@@ -32,6 +35,7 @@ async def generate_report(state: AnalysisState) -> AnalysisState:
 
     # 1차: SWOT 분석 (JSON 형식 강제)
     try:
+        swot_started_at = time.perf_counter()
         swot_prompt = (
             f"{context}\n\n"
             "위 정보를 바탕으로 이 지원자의 취업 관련 SWOT 분석을 수행하세요.\n"
@@ -48,9 +52,11 @@ async def generate_report(state: AnalysisState) -> AnalysisState:
             lines = raw_swot.split("\n")
             raw_swot = "\n".join(lines[1:-1])
         swot = json.loads(raw_swot)
+        timings["node4_swot_step"] = round((time.perf_counter() - swot_started_at) * 1000, 2)
 
     except Exception as e:
         print(f"[Node 4] SWOT 생성 실패: {e}")
+        timings["node4_swot_step"] = round((time.perf_counter() - swot_started_at) * 1000, 2)
         swot = {
             "strengths": [],
             "weaknesses": [],
@@ -60,6 +66,7 @@ async def generate_report(state: AnalysisState) -> AnalysisState:
 
     # 2차: 종합 리포트 (마크다운)
     try:
+        report_started_at = time.perf_counter()
         swot_text = (
             f"강점: {', '.join(swot.get('strengths', []))}\n"
             f"약점: {', '.join(swot.get('weaknesses', []))}\n"
@@ -80,10 +87,16 @@ async def generate_report(state: AnalysisState) -> AnalysisState:
             "지원자의 강점과 산업 트렌드를 연결지어 실질적인 조언을 제공하세요."
         )
         final_report = await claude_llm_service.complete(report_prompt, max_tokens=2000)
-        print(f"[Node 4] 리포트 생성 완료 ({len(final_report)}자)")
+        timings["node4_report_step"] = round((time.perf_counter() - report_started_at) * 1000, 2)
+        print(
+            f"[Node 4] 리포트 생성 완료 ({len(final_report)}자, "
+            f"{timings['node4_report_step']}ms)"
+        )
 
     except Exception as e:
         print(f"[Node 4] 리포트 생성 실패: {e}")
+        timings["node4_report_step"] = round((time.perf_counter() - report_started_at) * 1000, 2)
         final_report = "리포트 생성 중 오류가 발생했습니다."
 
-    return {**state, "swot": swot, "final_report": final_report}
+    timings["node4_generate_report"] = round((time.perf_counter() - started_at) * 1000, 2)
+    return {**state, "swot": swot, "final_report": final_report, "node_timings_ms": timings}

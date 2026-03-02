@@ -1,3 +1,5 @@
+import time
+
 from app.agents.state import AnalysisState
 from app.services.claude_llm import claude_llm_service
 
@@ -11,12 +13,19 @@ async def analyze_relevance(state: AnalysisState) -> AnalysisState:
     """
     if state.get("error"):
         return state
+    started_at = time.perf_counter()
+    timings = dict(state.get("node_timings_ms") or {})
 
     profile = state["resume_profile"]
     matched_news = state.get("matched_news") or []
 
     if not matched_news:
-        return {**state, "relevance_analysis": "관련 뉴스 데이터가 없어 분석을 진행할 수 없습니다."}
+        timings["node3_analyze_relevance"] = round((time.perf_counter() - started_at) * 1000, 2)
+        return {
+            **state,
+            "relevance_analysis": "관련 뉴스 데이터가 없어 분석을 진행할 수 없습니다.",
+            "node_timings_ms": timings,
+        }
 
     news_texts = "\n---\n".join(
         n["document"] for n in matched_news if n.get("document")
@@ -40,9 +49,11 @@ async def analyze_relevance(state: AnalysisState) -> AnalysisState:
             "2. 이 트렌드가 지원자의 스킬/경험과 어떻게 연관되는지 구체적으로 분석"
         )
         analysis = await claude_llm_service.complete(prompt, max_tokens=1500)
-        print(f"[Node 3] 관련성 분석 완료 ({len(analysis)}자)")
-        return {**state, "relevance_analysis": analysis}
+        timings["node3_analyze_relevance"] = round((time.perf_counter() - started_at) * 1000, 2)
+        print(f"[Node 3] 관련성 분석 완료 ({len(analysis)}자, {timings['node3_analyze_relevance']}ms)")
+        return {**state, "relevance_analysis": analysis, "node_timings_ms": timings}
 
     except Exception as e:
         print(f"[Node 3] 관련성 분석 실패: {e}")
-        return {**state, "error": f"관련성 분석 실패: {e}"}
+        timings["node3_analyze_relevance"] = round((time.perf_counter() - started_at) * 1000, 2)
+        return {**state, "error": f"관련성 분석 실패: {e}", "node_timings_ms": timings}

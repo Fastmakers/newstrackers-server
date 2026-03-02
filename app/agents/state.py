@@ -11,11 +11,20 @@ class ResumeProfile(TypedDict):
     experiences: list[str]   # 경험/프로젝트 (예: ["스타트업 서버 개발 2년"])
 
 
+class UserProfileInput(TypedDict, total=False):
+    """사용자 직접 입력 프로필 (미입력 항목은 생략)"""
+
+    job_title: str
+    industry: str
+    company: str
+
+
 class AnalysisState(TypedDict):
     """LangGraph 파이프라인 전체 상태"""
 
     # 입력 (PDF 추출 텍스트)
     resume_text: str
+    user_profile_input: Optional[UserProfileInput]
 
     # Node 1 출력: 자소서 분석
     resume_profile: Optional[ResumeProfile]
@@ -29,6 +38,9 @@ class AnalysisState(TypedDict):
     # Node 4 출력: SWOT + 종합 리포트
     swot: Optional[dict[str, list[str]]]
     final_report: Optional[str]
+
+    # 노드별 실행 시간(ms)
+    node_timings_ms: Optional[dict[str, float]]
 
     # 에러 메시지 (None이면 성공)
     error: Optional[str]

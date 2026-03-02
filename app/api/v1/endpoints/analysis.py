@@ -13,6 +13,9 @@ async def generate_analysis_report(
     file: UploadFile = File(...),
     include_raw_news: bool = Form(False),
     match_only: bool = Form(False),
+    industry: str | None = Form(None),
+    company: str | None = Form(None),
+    job_title: str | None = Form(None),
 ):
     """
     자소서 PDF를 업로드하면 LangGraph 파이프라인을 통해 다음을 분석합니다:
@@ -31,13 +34,25 @@ async def generate_analysis_report(
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
 
+    user_profile_input = {
+        k: v.strip()
+        for k, v in {
+            "industry": industry,
+            "company": company,
+            "job_title": job_title,
+        }.items()
+        if v and v.strip()
+    }
+
     initial_state = {
         "resume_text": resume_text,
+        "user_profile_input": user_profile_input or None,
         "resume_profile": None,
         "matched_news": None,
         "relevance_analysis": None,
         "swot": None,
         "final_report": None,
+        "node_timings_ms": {},
         "error": None,
     }
 
@@ -68,10 +83,12 @@ async def generate_analysis_report(
     return {
         "status": "success",
         "mode": "match_only" if match_only else "full_report",
+        "input_profile": user_profile_input or None,
         "resume_profile": result["resume_profile"],
         "matched_news_count": len(slim_news),
         "matched_news": slim_news,
         "raw_matched_news": result["matched_news"] if include_raw_news else None,
+        "node_timings_ms": result.get("node_timings_ms"),
         "relevance_analysis": result.get("relevance_analysis"),
         "swot": result.get("swot"),
         "final_report": result.get("final_report"),
