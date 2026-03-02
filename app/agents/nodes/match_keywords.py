@@ -1,3 +1,5 @@
+import asyncio
+
 from app.agents.state import AnalysisState
 from app.services.vector_store import vector_store_service
 
@@ -27,24 +29,29 @@ async def match_keywords(state: AnalysisState) -> AnalysisState:
     seen_ids: set[str] = set()
     all_results: list[dict] = []
 
-    for query in search_queries:
-        if not query.strip():
+    valid_queries = [query for query in search_queries if query.strip()]
+    tasks = [
+        vector_store_service.search(
+            query=query,
+            n_results=5,
+        )
+        for query in valid_queries
+    ]
+    results_per_query = await asyncio.gather(*tasks, return_exceptions=True)
+
+    for query, results in zip(valid_queries, results_per_query):
+        if isinstance(results, Exception):
+            print(f"[Node 2] 검색 실패 (query='{query}'): {results}")
             continue
-        try:
-            results = await vector_store_service.search(
-                query=query,
-                n_results=5,
-            )
-            for r in results:
-                if r["id"] not in seen_ids:
-                    seen_ids.add(r["id"])
-                    all_results.append(r)
-        except Exception as e:
-            print(f"[Node 2] 검색 실패 (query='{query}'): {e}")
+
+        for r in results:
+            if r["id"] not in seen_ids:
+                seen_ids.add(r["id"])
+                all_results.append(r)
 
     # distance 오름차순 재정렬 후 최대 15건
     all_results.sort(key=lambda x: x["distance"])
     top_results = all_results[:15]
 
-    print(f"[Node 2] 키워드 매칭 완료: {len(top_results)}건 (쿼리 {len(search_queries)}개)")
+    print(f"[Node 2] 키워드 매칭 완료: {len(top_results)}건 (쿼리 {len(valid_queries)}개)")
     return {**state, "matched_news": top_results}
