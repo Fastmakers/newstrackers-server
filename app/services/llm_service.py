@@ -386,6 +386,44 @@ class LLMService:
 
         yield from self.stream_text(system_prompt, user_message, temperature=0.5)
 
+    def generate_rag_answer(self, query: str, chunks: list) -> str:
+        """검색된 뉴스 청크를 컨텍스트로 활용해 자소서 맞춤 면접 준비 답변 생성 (Claude Sonnet).
+
+        Args:
+            query:  자소서 원문 또는 검색 쿼리
+            chunks: hybrid_search / vector_search가 반환한 NewsChunk 리스트 (Top 5)
+
+        Returns:
+            뉴스 기반 면접 준비 답변 (한국어 마크다운)
+        """
+        if not chunks:
+            return "관련 뉴스를 찾을 수 없어 답변을 생성할 수 없습니다."
+
+        context = "\n\n".join(
+            f"[{i + 1}] {chunk.chunk_text[:400]}"
+            for i, chunk in enumerate(chunks)
+        )
+
+        system_prompt = """당신은 취업 면접 코치입니다.
+지원자의 자기소개서와 관련 뉴스 기사를 바탕으로, 면접에서 활용할 수 있는
+구체적이고 실용적인 인사이트를 제공합니다.
+뉴스의 트렌드·이슈를 지원자의 경험·역량과 연결해 답변하세요."""
+
+        user_message = f"""다음 자기소개서와 관련 뉴스를 바탕으로 면접 준비에 도움이 되는 분석을 제공하세요.
+
+[자기소개서 / 검색 쿼리]
+{query[:1500]}
+
+[관련 뉴스 발췌]
+{context}
+
+다음 항목을 포함해 답변하세요:
+1. 관련 산업 트렌드 요약 (뉴스 기반)
+2. 지원자 역량과 트렌드의 연결 포인트
+3. 면접에서 활용할 수 있는 구체적 키워드·사례"""
+
+        return self._call_claude(system_prompt, user_message, temperature=0.5)
+
     def analyze_resume(self, resume: str) -> Dict[str, Any]:
         """Extract structured information from a resume or cover letter.
 
@@ -416,8 +454,15 @@ class LLMService:
 }}"""
 
         try:
-            response = self._call_claude(system_prompt, user_message, temperature=0.3)
-            return self._extract_json(response)
+            response = self.client.messages.create(
+                model="claude-haiku-4-5-20251001",
+                max_tokens=600,
+                temperature=0.3,
+                system=system_prompt,
+                messages=[{"role": "user", "content": user_message}],
+                timeout=15,
+            )
+            return self._extract_json(response.content[0].text)
         except Exception as e:
             logger.error(f"Resume analysis failed: {e}")
             return {

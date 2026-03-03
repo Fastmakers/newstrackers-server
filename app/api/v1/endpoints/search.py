@@ -1,26 +1,34 @@
-"""
-뉴스 하이브리드 검색 엔드포인트.
+"""RAG 파이프라인 검색 엔드포인트.
 
-파이프라인:
-    1. (선택) Claude Haiku로 질의 변환 → 핵심 키워드 + 압축 쿼리
-    2. 벡터 검색 100건 + 키워드 검색 100건 (hybrid_search)
-    3. RRF 융합 → top_k 반환
-    [4. Cross-Encoder 리랭킹 — 미구현]
+파이프라인 버전:
+    V1 (Baseline):  자소서 원문 → 벡터 검색 Top 5 → Claude 답변
+    V2 (Hybrid):    자소서 원문 → Haiku 질의변환 → Hybrid(Vector+trgm→RRF) Top 5 → Claude 답변
+    V3 (Reranker):  V2 동일 (RRF Top 20) → Cross-Encoder → Top 5 → Claude 답변
 
 POST /api/v1/search
 """
 
-import time
 import logging
+import time
+
 from fastapi import APIRouter, Depends, HTTPException, status
 
-from app.core.dependencies import get_news_service, get_llm_service
-from app.schemas.data_models import SearchRequest, SearchResponse, SearchResult
-from app.services.news_service import NewsService
+from app.core.dependencies import get_llm_service, get_news_service
+from app.schemas.data_models import (
+    LatencyBreakdown,
+    SearchRequest,
+    SearchResponse,
+    SearchResult,
+)
 from app.services.llm_service import LLMService
+from app.services.news_service import NewsService
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+
+def _ms(start: float) -> float:
+    return round((time.time() - start) * 1000, 1)
 
 
 @router.post("", response_model=SearchResponse)
@@ -29,52 +37,82 @@ def search_news(
     news_service: NewsService = Depends(get_news_service),
     llm_service: LLMService = Depends(get_llm_service),
 ) -> SearchResponse:
+    """RAG 파이프라인으로 관련 뉴스를 검색하고 Claude 답변을 생성합니다.
+
+    - `pipeline=v1`: 가장 단순한 벡터 검색 (하한선 기준)
+    - `pipeline=v2`: Haiku 질의변환 + Hybrid 검색 (권장)
+    - `pipeline=v3`: v2 + Cross-Encoder 재배열 (최고 정밀도)
+
+    각 단계 소요 시간은 `latency` 필드에서 확인할 수 있습니다.
     """
-    자소서·검색어 기반 관련 뉴스 청크 검색.
+    t_total = time.time()
 
-    - `transform_query=true`: Claude Haiku가 긴 자소서를 핵심 쿼리로 압축 후 검색
-    - `transform_query=false`: 입력 텍스트를 그대로 검색어로 사용
-
-    ### 응답 필드
-    - `transformed_query`: 실제 검색에 사용된 쿼리 (변환 시)
-    - `keywords`: 추출된 핵심 키워드
-    - `results[].chunk_text`: 관련 뉴스 본문 발췌
-    - `results[].rrf_score`: RRF 점수 (높을수록 관련도 높음)
-    """
-    start_time = time.time()
-
-    # ── Step 1. 질의 변환 (선택적) ─────────────────────────────────────────
+    # ── Step 1. 질의 변환 (V2/V3 전용) ────────────────────────────────────────
     transformed_query = request.query
     keywords: list[str] = []
+    transform_ms: float | None = None
 
-    if request.transform_query and len(request.query) > 30:
+    if request.pipeline in ("v2", "v3") and len(request.query) > 30:
+        t0 = time.time()
         try:
             result = llm_service.transform_query(request.query)
             transformed_query = result.get("query") or request.query
             keywords = result.get("keywords") or []
             logger.info(
-                "Query transformed: '%s...' → '%s'",
+                "쿼리 변환 완료: '%s...' → '%s'",
                 request.query[:30],
                 transformed_query[:60],
             )
         except Exception as exc:
-            logger.warning("Query transformation skipped: %s", exc)
+            logger.warning("쿼리 변환 실패 (원문 사용): %s", exc)
+        transform_ms = _ms(t0)
 
-    # ── Step 2. 하이브리드 검색 (벡터 + ILIKE → RRF) ─────────────────────
+    # ── Step 2. 검색 ──────────────────────────────────────────────────────────
+    t0 = time.time()
     try:
-        chunks = news_service.hybrid_search(
-            query=transformed_query,
-            category_l2=request.category_l2,
-            top_k=request.top_k,
-        )
+        if request.pipeline == "v1":
+            chunks = news_service.vector_search(
+                query=request.query,
+                category_l2=request.category_l2,
+                top_k=request.top_k,
+            )
+        elif request.pipeline == "v2":
+            chunks = news_service.hybrid_search(
+                query=transformed_query,
+                category_l2=request.category_l2,
+                top_k=request.top_k,
+                use_reranker=False,
+            )
+        else:  # v3
+            chunks = news_service.hybrid_search(
+                query=transformed_query,
+                category_l2=request.category_l2,
+                top_k=request.top_k,
+                use_reranker=True,
+            )
     except Exception as exc:
-        logger.error("hybrid_search failed: %s", exc)
+        logger.error("검색 실패 (pipeline=%s): %s", request.pipeline, exc)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="검색 서비스에 일시적인 오류가 발생했습니다.",
         ) from exc
 
-    # ── Step 3. 응답 조립 ──────────────────────────────────────────────────
+    retrieval_ms = _ms(t0)
+
+    # V3 Reranker 소요 시간은 hybrid_search 내부에서 처리되므로
+    # retrieval_ms에 포함됨. 별도 측정이 필요하면 NewsService 시그니처 확장 필요.
+    rerank_ms: float | None = None
+
+    # ── Step 3. 답변 생성 (Claude Sonnet) ────────────────────────────────────
+    t0 = time.time()
+    try:
+        answer = llm_service.generate_rag_answer(request.query, chunks)
+    except Exception as exc:
+        logger.error("답변 생성 실패: %s", exc)
+        answer = None
+    answer_ms = _ms(t0)
+
+    # ── Step 4. 응답 조립 ─────────────────────────────────────────────────────
     results = [
         SearchResult(
             rank=i + 1,
@@ -88,13 +126,21 @@ def search_news(
         for i, chunk in enumerate(chunks)
     ]
 
-    elapsed_ms = (time.time() - start_time) * 1000
+    total_ms = _ms(t_total)
 
     return SearchResponse(
+        pipeline=request.pipeline,
         original_query=request.query,
         transformed_query=transformed_query if transformed_query != request.query else None,
         keywords=keywords,
         results=results,
         total_results=len(results),
-        search_time_ms=round(elapsed_ms, 1),
+        answer=answer,
+        latency=LatencyBreakdown(
+            query_transform_ms=transform_ms,
+            retrieval_ms=retrieval_ms,
+            rerank_ms=rerank_ms,
+            answer_ms=answer_ms,
+            total_ms=total_ms,
+        ),
     )

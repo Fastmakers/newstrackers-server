@@ -4,7 +4,7 @@ Defines all request/response schemas
 """
 
 from datetime import datetime
-from typing import List, Optional
+from typing import List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -220,13 +220,19 @@ class CompanyAnalysisRequest(BaseModel):
 # ============================================================================
 
 class SearchRequest(BaseModel):
-    """하이브리드 뉴스 검색 요청."""
+    """RAG 파이프라인 검색 요청.
+
+    pipeline 선택:
+        v1 — 원문 → 벡터 검색 Top 5 → Claude 답변
+        v2 — Haiku 질의변환 → Hybrid(Vector+trgm→RRF) Top 5 → Claude 답변
+        v3 — v2 동일 (RRF Top 20) → Cross-Encoder → Top 5 → Claude 답변
+    """
     query: str = Field(..., min_length=1, description="검색어 또는 자소서 원문")
     category_l2: Optional[str] = Field(None, description="카테고리 필터 (예: 경제, IT·과학)")
-    top_k: int = Field(default=10, ge=1, le=50, description="반환할 결과 수")
-    transform_query: bool = Field(
-        default=True,
-        description="True면 Claude Haiku로 쿼리를 핵심 키워드+문장으로 압축 후 검색",
+    top_k: int = Field(default=5, ge=1, le=50, description="반환할 결과 수")
+    pipeline: Literal["v1", "v2", "v3"] = Field(
+        default="v2",
+        description="RAG 파이프라인 버전 (v1=Baseline, v2=Hybrid, v3=Reranker)",
     )
 
 
@@ -239,34 +245,24 @@ class SearchResult(BaseModel):
     published_at: Optional[datetime] = None
     category_l2: Optional[str] = None
     chunk_text: str
-    rrf_score: Optional[float] = None   # 디버깅용 RRF 점수
+
+
+class LatencyBreakdown(BaseModel):
+    """파이프라인 단계별 소요 시간 (ms)."""
+    query_transform_ms: Optional[float] = None   # v2/v3 — Haiku 질의변환
+    retrieval_ms: float                           # 검색 (벡터 or 하이브리드+RRF)
+    rerank_ms: Optional[float] = None            # v3 — Cross-Encoder 재배열
+    answer_ms: Optional[float] = None            # Claude 답변 생성
+    total_ms: float
 
 
 class SearchResponse(BaseModel):
-    """하이브리드 검색 응답."""
+    """RAG 파이프라인 검색 응답."""
+    pipeline: str                                         # 실행된 파이프라인 버전
     original_query: str
-    transformed_query: Optional[str] = None   # 질의 변환 후 실제 검색 쿼리
-    keywords: List[str] = Field(default_factory=list)  # 추출된 핵심 키워드
+    transformed_query: Optional[str] = None              # v2/v3 — Haiku가 변환한 쿼리
+    keywords: List[str] = Field(default_factory=list)    # v2/v3 — 추출된 핵심 키워드
     results: List[SearchResult]
     total_results: int
-    search_time_ms: float
-
-
-# ============================================================================
-# Response Models
-# ============================================================================
-
-class APIResponse(BaseModel):
-    """Generic API response"""
-    success: bool
-    message: str
-    data: Optional[dict] = None
-    error: Optional[str] = None
-    timestamp: datetime = Field(default_factory=datetime.now)
-
-
-class HealthCheck(BaseModel):
-    """Health check response"""
-    status: str
-    services: dict = Field(default_factory=dict)
-    timestamp: datetime = Field(default_factory=datetime.now)
+    answer: Optional[str] = None                         # Claude가 생성한 RAG 답변
+    latency: LatencyBreakdown

@@ -14,7 +14,7 @@ class Settings(BaseSettings):
     )
 
     # Project info
-    PROJECT_NAME: str = "NewStrackers AI"
+    PROJECT_NAME: str = "NewsTrackers AI"
     VERSION: str = "0.1.0"
     DESCRIPTION: str = "AI-Powered Job Interview and Career Development Platform"
     ALLOWED_ORIGINS: list[str] = ["http://localhost:3000"]
@@ -36,9 +36,6 @@ class Settings(BaseSettings):
 
     # Application
     DEBUG: bool = False
-
-    # Search
-    ENABLE_RERANKER: bool = False  # True면 Cross-Encoder 리랭킹 활성화 (sentence-transformers 필요)
 
     # Project paths
     PROJECT_ROOT: Path = Path(__file__).parent.parent.parent
