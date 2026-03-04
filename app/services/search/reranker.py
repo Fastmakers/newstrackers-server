@@ -1,7 +1,7 @@
 """
 Cross-Encoder 리랭커 — RRF 후보 30건 → top_k 재정렬.
 
-모델: BAAI/bge-reranker-m3 (다국어, 한국어 지원)
+모델: BAAI/bge-reranker-v2-m3 (다국어, 한국어 지원)
 의존성: sentence-transformers
 
 Lazy-load: 첫 rerank() 호출 시 모델을 메모리에 올린다.
@@ -18,7 +18,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-MODEL_ID = "BAAI/bge-reranker-m3"
+MODEL_ID = "BAAI/bge-reranker-v2-m3"
 
 
 class CrossEncoderReranker:
@@ -68,7 +68,13 @@ class CrossEncoderReranker:
             return []
 
         try:
-            pairs = [(query, chunk.chunk_text) for chunk in chunks]
+            pairs = [
+                (
+                    query,
+                    f"제목: {chunk.article.title if chunk.article else ''}\n{chunk.chunk_text}",
+                )
+                for chunk in chunks
+            ]
             scores = self.model.predict(pairs)
             ranked = sorted(zip(scores, chunks), key=lambda x: x[0], reverse=True)
             return [chunk for _, chunk in ranked[:top_n]]

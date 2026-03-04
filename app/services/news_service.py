@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 EMBEDDING_MODEL = "text-embedding-3-small"
 
 # V3: Cross-Encoder에 전달할 RRF 후보 수
-_V3_RERANK_POOL = 20
+_V3_RERANK_POOL = 40
 
 
 class NewsService:
@@ -48,46 +48,79 @@ class NewsService:
     # 공개 검색 API
     # -------------------------------------------------------------------------
 
+    @staticmethod
+    def _dedup(chunks: list[NewsChunk], top_k: int) -> list[NewsChunk]:
+        """article_id 기준 중복 청크 제거 — 먼저 나온 청크(순위 높은 것)만 유지."""
+        seen: set[int] = set()
+        result: list[NewsChunk] = []
+        for chunk in chunks:
+            if chunk.article_id not in seen:
+                seen.add(chunk.article_id)
+                result.append(chunk)
+                if len(result) == top_k:
+                    break
+        return result
+
+    @staticmethod
+    def _title_boost(chunks: list[NewsChunk], company: str) -> list[NewsChunk]:
+        """제목·카테고리에 기업명 포함 시 RRF 점수에 보너스 — V1/V2 경량 재정렬.
+
+        base_score = 1 / (60 + rank)  (RRF 방식)
+        bonus      = 0.3 if company in title
+        최종 정렬 : base_score + bonus 내림차순
+        """
+        scored = []
+        for rank, chunk in enumerate(chunks, start=1):
+            title = chunk.article.title if chunk.article else ""
+            bonus = 0.3 if company in title else 0.0
+            scored.append((1.0 / (60 + rank) + bonus, chunk))
+        scored.sort(key=lambda x: x[0], reverse=True)
+        return [c for _, c in scored]
+
     def vector_search(
         self,
         query: str,
+        company: str = "",
         category_l2: Optional[str] = None,
         top_k: int = 5,
     ) -> list[NewsChunk]:
-        """V1 Baseline — 벡터 유사도 검색만 수행.
+        """V1 Baseline — 벡터 유사도 검색 + title 기업명 보너스 재정렬.
 
         Args:
             query:       자소서 원문 (임베딩 후 코사인 유사도 검색)
+            company:     기업명 (title 보너스용)
             category_l2: 카테고리 필터
             top_k:       반환 청크 수
         """
         embedding = self.embed_query(query)
-        return self._vector_search_chunks(embedding, category_l2, limit=top_k)
+        chunks = self._vector_search_chunks(embedding, category_l2, limit=100)
+        if company:
+            chunks = self._title_boost(chunks, company)
+        return self._dedup(chunks, top_k)
 
     def hybrid_search(
         self,
         query: str,
+        keyword_query: Optional[str] = None,
         category_l2: Optional[str] = None,
         top_k: int = 5,
-        use_reranker: bool = False,
     ) -> list[NewsChunk]:
-        """V2/V3 — 하이브리드 검색 (벡터 + pg_trgm → RRF → optional Cross-Encoder).
+        """V2 — 하이브리드 검색 (벡터 + pg_trgm → RRF → Top K).
 
         병렬 처리:
             embed_query ──────────────► vector_search ─┐
-            keyword_search (pg_trgm) ──────────────────┤► RRF
-                                                        │
-            V3: ────────────────────────────────────────┤► Cross-Encoder ► Top K
-            V2: ────────────────────────────────────────┘► Top K
+            keyword_search (pg_trgm) ──────────────────┤► RRF ► Top K
 
         Args:
-            query:        Haiku가 변환한 압축 쿼리 (v2/v3)
-            top_k:        최종 반환 청크 수
-            use_reranker: True = V3 (RRF Top 20 → Cross-Encoder), False = V2 (RRF Top K)
+            query:         Haiku가 변환한 압축 쿼리 (벡터 임베딩용)
+            keyword_query: pg_trgm 검색용 쿼리 (기본값: query와 동일)
+                           기업명만 넣으면 더 정밀한 keyword 매칭 가능
+            top_k:         최종 반환 청크 수
         """
+        kw_query = keyword_query or query
         with ThreadPoolExecutor(max_workers=3) as executor:
             future_embed = executor.submit(self.embed_query, query)
-            future_keyword = executor.submit(self._keyword_search_chunks, query, category_l2)
+            future_keyword = executor.submit(self._keyword_search_chunks, kw_query, category_l2)
 
             embedding = future_embed.result()
             future_vector = executor.submit(self._vector_search_chunks, embedding, category_l2)
@@ -96,12 +129,23 @@ class NewsService:
             vector_chunks = future_vector.result()
 
         fused = rrf_fuse(vector_chunks, keyword_chunks, top_n=100)
+        return self._dedup(fused, top_k)
 
-        if use_reranker:
-            rerank_pool = fused[:_V3_RERANK_POOL]
-            return self._get_reranker().rerank(query, rerank_pool, top_n=top_k)
+    def rerank_chunks(
+        self,
+        query: str,
+        chunks: list[NewsChunk],
+        top_k: int = 5,
+    ) -> list[NewsChunk]:
+        """V3 — Cross-Encoder 재배열 (hybrid_search 결과를 입력으로 받음).
 
-        return fused[:top_k]
+        Args:
+            query:  검색 쿼리 (Cross-Encoder 스코어링 기준)
+            chunks: hybrid_search가 반환한 후보 청크 (최대 _V3_RERANK_POOL개 권장)
+            top_k:  최종 반환 청크 수
+        """
+        reranked = self._get_reranker().rerank(query, chunks, top_n=len(chunks))
+        return self._dedup(reranked, top_k)
 
     def get_articles(
         self,

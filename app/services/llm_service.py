@@ -23,7 +23,7 @@ class LLMService:
             raise ValueError(
                 "ANTHROPIC_API_KEY is required. Set it in .env or pass api_key to constructor."
             )
-        self.client = Anthropic(api_key=self.api_key)
+        self.client = Anthropic(api_key=self.api_key, max_retries=0)
         self.model = settings.LLM_MODEL
         self.max_tokens = settings.LLM_MAX_TOKENS
         self.temperature = settings.LLM_TEMPERATURE
@@ -270,19 +270,27 @@ class LLMService:
         Returns:
             {"keywords": [...], "query": "압축된 검색 문장"}
         """
-        system_prompt = """당신은 검색 쿼리 최적화 전문가입니다.
-주어진 텍스트에서 뉴스 기사 검색에 가장 유용한 핵심 키워드와 압축 쿼리를 추출합니다.
+        system_prompt = """당신은 뉴스 검색 쿼리 최적화 전문가입니다.
+자소서와 지원 정보를 분석해, 경제/산업 뉴스 기사에서 검색할 쿼리를 생성합니다.
 반드시 JSON 형식으로만 응답하세요."""
 
-        user_message = f"""다음 텍스트를 뉴스 검색에 최적화된 쿼리로 변환하세요.
+        user_message = f"""다음 내용을 경제/기업 뉴스 검색 쿼리로 변환하세요.
 
-텍스트:
 {text[:1500]}
+
+규칙:
+- keywords는 지원 기업의 뉴스에서 등장할 법한 사업/전략/서비스/제품 키워드 (FastAPI, 마이크로서비스 같은 지원자 개인 기술스택 X)
+- query는 "[기업명] [사업부문] 전략/사업/서비스" 형태로 작성 (뉴스 제목에 나올 법한 표현)
+- query는 15단어 이내로 압축
+
+예시:
+- 잘못된 예: "삼성전자 DX부문 FastAPI 마이크로서비스 병렬처리"
+- 올바른 예: "삼성전자 DX부문 소프트웨어 AI 갤럭시 서비스 전략"
 
 응답 형식 (JSON):
 {{
-  "keywords": ["핵심키워드1", "핵심키워드2", "핵심키워드3"],
-  "query": "뉴스 검색에 최적화된 압축 쿼리 (1~2문장)"
+  "keywords": ["기업명", "사업부문", "사업키워드1", "사업키워드2"],
+  "query": "[기업명] [사업부문] 관련 뉴스 키워드 (15단어 이내)"
 }}"""
 
         try:
@@ -386,12 +394,22 @@ class LLMService:
 
         yield from self.stream_text(system_prompt, user_message, temperature=0.5)
 
-    def generate_rag_answer(self, query: str, chunks: list) -> str:
-        """검색된 뉴스 청크를 컨텍스트로 활용해 자소서 맞춤 면접 준비 답변 생성 (Claude Sonnet).
+    def generate_rag_answer(
+        self,
+        query: str,
+        chunks: list,
+        resume: str | None = None,
+        company: str | None = None,
+        position: str | None = None,
+    ) -> str:
+        """검색된 뉴스 청크를 컨텍스트로 활용해 면접 준비 답변 생성 (Claude Sonnet).
 
         Args:
-            query:  자소서 원문 또는 검색 쿼리
-            chunks: hybrid_search / vector_search가 반환한 NewsChunk 리스트 (Top 5)
+            query:    변환된 검색 쿼리
+            chunks:   검색된 NewsChunk 리스트 (Top 5)
+            resume:   자소서 원문
+            company:  지원 기업명
+            position: 지원 직군
 
         Returns:
             뉴스 기반 면접 준비 답변 (한국어 마크다운)
@@ -404,21 +422,29 @@ class LLMService:
             for i, chunk in enumerate(chunks)
         )
 
+        meta_lines = ""
+        if company:
+            meta_lines += f"지원 기업: {company}\n"
+        if position:
+            meta_lines += f"지원 직군: {position}\n"
+
+        target = f"{company or '해당 기업'}{f' ({position})' if position else ''}"
+
         system_prompt = """당신은 취업 면접 코치입니다.
 지원자의 자기소개서와 관련 뉴스 기사를 바탕으로, 면접에서 활용할 수 있는
 구체적이고 실용적인 인사이트를 제공합니다.
 뉴스의 트렌드·이슈를 지원자의 경험·역량과 연결해 답변하세요."""
 
-        user_message = f"""다음 자기소개서와 관련 뉴스를 바탕으로 면접 준비에 도움이 되는 분석을 제공하세요.
+        user_message = f"""다음 내용을 바탕으로 면접 준비에 도움이 되는 분석을 제공하세요.
 
-[자기소개서 / 검색 쿼리]
-{query[:1500]}
+{meta_lines}[자기소개서]
+{resume[:2000] if resume else query[:500]}
 
 [관련 뉴스 발췌]
 {context}
 
 다음 항목을 포함해 답변하세요:
-1. 관련 산업 트렌드 요약 (뉴스 기반)
+1. {target} 관련 최신 트렌드 요약 (뉴스 기반)
 2. 지원자 역량과 트렌드의 연결 포인트
 3. 면접에서 활용할 수 있는 구체적 키워드·사례"""
 

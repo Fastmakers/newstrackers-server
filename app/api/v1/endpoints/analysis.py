@@ -12,7 +12,7 @@ import json
 import logging
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timedelta
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, Form, HTTPException, UploadFile, status
 from fastapi.responses import StreamingResponse
@@ -108,11 +108,10 @@ def _compute_monthly_sentiment(articles: list[NewsArticle]) -> list[MonthlySenti
     return result
 
 
-def _compute_source_stats(articles: list[NewsArticle], days_back: int) -> SourceStats:
+def _compute_source_stats(articles: list[NewsArticle]) -> SourceStats:
     sources = Counter(a.source for a in articles if a.source)
     return SourceStats(
         total_articles=len(articles),
-        date_range_days=days_back,
         top_sources=[s for s, _ in sources.most_common(5)],
         last_updated=datetime.now(),
     )
@@ -183,7 +182,7 @@ def analyze_industry(
         f_trends = ex.submit(llm_service.extract_trends, articles, request.industry)
         f_keywords = ex.submit(llm_service.extract_keywords, articles)
         f_sentiment = ex.submit(_compute_monthly_sentiment, articles)
-        f_stats = ex.submit(_compute_source_stats, articles, request.days_back)
+        f_stats = ex.submit(_compute_source_stats, articles)
 
         trends = f_trends.result()
         keywords_raw = f_keywords.result()
@@ -193,13 +192,9 @@ def analyze_industry(
     if len(trends) < 3:
         trends = (trends + ["뉴스 데이터를 찾을 수 없습니다."] * 3)[:3]
 
-    now = datetime.now()
     return IndustryData(
         industry=request.industry,
-        period={
-            "from": (now - timedelta(days=request.days_back)).strftime("%Y-%m-%d"),
-            "to": now.strftime("%Y-%m-%d"),
-        },
+        period={},
         trends=trends,
         keywords=[Keyword(**kw) for kw in keywords_raw],
         monthly_sentiment=sentiment,
@@ -293,7 +288,6 @@ def analyze_company(
 async def analyze_company_with_resume_file(
     company: str = Form(..., description="지원 기업명 (예: 삼성전자)"),
     industry: str = Form(..., description="산업군 (예: 반도체)"),
-    days_back: int = Form(default=365, ge=1, le=365),
     file: UploadFile = None,
     news_service: NewsService = Depends(get_news_service),
     llm_service: LLMService = Depends(get_llm_service),
@@ -332,7 +326,6 @@ async def analyze_company_with_resume_file(
             company=company,
             industry=industry,
             resume=resume_text,
-            days_back=days_back,
         ),
         news_service=news_service,
         llm_service=llm_service,

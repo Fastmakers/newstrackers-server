@@ -70,7 +70,6 @@ class MonthlySentiment(BaseModel):
 class SourceStats(BaseModel):
     """Statistics about news sources"""
     total_articles: int
-    date_range_days: int
     top_sources: List[str]
     last_updated: datetime
 
@@ -204,7 +203,6 @@ class ResumeAnalysis(BaseModel):
 class IndustryAnalysisRequest(BaseModel):
     """Request for industry analysis"""
     industry: str
-    days_back: int = Field(default=365, ge=1, le=365)
 
 
 class CompanyAnalysisRequest(BaseModel):
@@ -212,7 +210,6 @@ class CompanyAnalysisRequest(BaseModel):
     company: str
     industry: str
     resume: str = Field(..., min_length=10)
-    days_back: int = Field(default=365, ge=1, le=365)
 
 
 # ============================================================================
@@ -223,17 +220,19 @@ class SearchRequest(BaseModel):
     """RAG 파이프라인 검색 요청.
 
     pipeline 선택:
-        v1 — 원문 → 벡터 검색 Top 5 → Claude 답변
-        v2 — Haiku 질의변환 → Hybrid(Vector+trgm→RRF) Top 5 → Claude 답변
-        v3 — v2 동일 (RRF Top 20) → Cross-Encoder → Top 5 → Claude 답변
+        v1 — 자소서 원문 → 벡터 검색 Top 5 → Claude 답변
+        v2 — 자소서 원문 → Haiku 질의변환 → Hybrid(Vector+trgm→RRF) Top 5 → Claude 답변
+        v3 — v2 동일 (RRF Top 40) → Cross-Encoder → Top 10 → Claude 답변
     """
-    query: str = Field(..., min_length=1, description="검색어 또는 자소서 원문")
-    category_l2: Optional[str] = Field(None, description="카테고리 필터 (예: 경제, IT·과학)")
-    top_k: int = Field(default=5, ge=1, le=50, description="반환할 결과 수")
+    company: str = Field(..., min_length=1, description="지원 기업명 (예: 삼성전자)")
+    position: str = Field(..., min_length=1, description="지원 직군 (예: 백엔드 개발자)")
+    resume: str = Field(..., min_length=10, description="자소서 원문")
+    top_k: int = Field(default=15, ge=1, le=50, description="반환할 결과 수")
     pipeline: Literal["v1", "v2", "v3"] = Field(
         default="v2",
         description="RAG 파이프라인 버전 (v1=Baseline, v2=Hybrid, v3=Reranker)",
     )
+    skip_answer: bool = Field(default=False, description="True면 Claude 답변 생성 생략 (검색 결과만 반환)")
 
 
 class SearchResult(BaseModel):
@@ -259,7 +258,6 @@ class LatencyBreakdown(BaseModel):
 class SearchResponse(BaseModel):
     """RAG 파이프라인 검색 응답."""
     pipeline: str                                         # 실행된 파이프라인 버전
-    original_query: str
     transformed_query: Optional[str] = None              # v2/v3 — Haiku가 변환한 쿼리
     keywords: List[str] = Field(default_factory=list)    # v2/v3 — 추출된 핵심 키워드
     results: List[SearchResult]

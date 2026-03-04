@@ -25,7 +25,7 @@ class Settings(BaseSettings):
     LLM_MODEL: str = "claude-sonnet-4-6"
     LLM_MAX_TOKENS: int = 2000
     LLM_TEMPERATURE: float = 0.7
-    LLM_TIMEOUT: int = 30
+    LLM_TIMEOUT: int = 60
 
     # Database
     DATABASE_URL: str = ""
