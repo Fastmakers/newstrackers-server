@@ -213,13 +213,13 @@ class NewsService:
         category_l2: Optional[str] = None,
         limit: int = 100,
     ) -> list[NewsChunk]:
-        """코사인 유사도 벡터 검색."""
+        """코사인 유사도 벡터 검색 (distance 포함)."""
         try:
             with self._repo() as db:
-                pairs = NewsRepository(db).search_chunks_by_vector(
+                rows = NewsRepository(db).search_chunks_by_vector(
                     embedding, category_l2, limit=limit
                 )
-                return [chunk_row_to_domain(c, article_row_to_domain(a)) for c, a in pairs]
+                return [chunk_row_to_domain(c, article_row_to_domain(a), distance=d) for c, a, d in rows]
         except Exception as e:
             logger.error("벡터 검색 오류: %s", e)
             return []

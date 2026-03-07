@@ -60,7 +60,16 @@ class LLMService:
             text = text[3:]
         if text.endswith("```"):
             text = text[:-3]
-        return json.loads(text.strip())
+        text = text.strip()
+        # If there's surrounding prose, extract the first JSON object/array
+        if not (text.startswith("{") or text.startswith("[")):
+            start = text.find("{")
+            arr_start = text.find("[")
+            if start == -1 or (arr_start != -1 and arr_start < start):
+                start = arr_start
+            if start != -1:
+                text = text[start:]
+        return json.loads(text)
 
     def extract_trends(
         self,
@@ -450,6 +459,215 @@ class LLMService:
 
         return self._call_claude(system_prompt, user_message, temperature=0.5)
 
+    # -------------------------------------------------------------------------
+    # Report 엔드포인트 전용 메서드 (/api/v1/analysis/report)
+    # -------------------------------------------------------------------------
+
+    def generate_swot_list(
+        self,
+        resume: str,
+        company: str,
+        job_title: str,
+        chunks: list,
+        industry: str = "",
+    ) -> Dict[str, List[str]]:
+        """지원자 관점 SWOT 분석 — 자소서 + 뉴스 기반, 각 항목 List[str] 반환.
+
+        지원자가 해당 기업/직무에 지원했을 때의 SWOT:
+          - Strengths:     지원자가 이 기업·직무에서 발휘할 수 있는 강점
+          - Weaknesses:    지원자가 보완해야 할 약점
+          - Opportunities: 지원자가 활용할 수 있는 산업/기업 기회 요인
+          - Threats:       지원자에게 불리한 외부 위협 요인
+
+        Args:
+            resume:    자소서 원문
+            company:   지원 기업명
+            job_title: 지원 직무
+            chunks:    NewsChunk 리스트 (하이브리드 검색 결과)
+            industry:  산업군 (보조 컨텍스트)
+
+        Returns:
+            {"strengths": [...], "weaknesses": [...], "opportunities": [...], "threats": [...]}
+        """
+        if not chunks and not resume.strip():
+            return {"strengths": [], "weaknesses": [], "opportunities": [], "threats": []}
+
+        news_context = "\n\n".join(
+            f"[뉴스 {i + 1}] {c.chunk_text[:250]}"
+            for i, c in enumerate(chunks[:10])
+        ) if chunks else "관련 뉴스 없음"
+
+        industry_hint = f" ({industry})" if industry else ""
+
+        system_prompt = f"""당신은 취업 전략 전문가입니다.
+지원자의 자소서와 {company}{industry_hint} 관련 뉴스를 분석해,
+지원자가 이 기업에 지원했을 때의 관점에서 SWOT 분석을 수행합니다.
+반드시 JSON 형식으로만 응답하세요."""
+
+        user_message = f"""다음 정보를 바탕으로 지원자의 SWOT 분석을 작성하세요.
+분석 기준은 '{company}'의 '{job_title}' 직무 지원입니다.
+
+[자소서 발췌]
+{resume[:1200]}
+
+[{company} 관련 뉴스 발췌]
+{news_context}
+
+각 항목에 2~3개의 구체적인 문장을 한국어로 작성하세요:
+- Strengths: 지원자가 이 기업·직무에서 발휘할 수 있는 구체적인 강점
+- Weaknesses: 지원자가 보완해야 할 약점 (산업/기업 요구사항 대비)
+- Opportunities: 지원자가 활용할 수 있는 산업/기업의 성장 기회
+- Threats: 지원자에게 불리한 시장 경쟁·기술 변화 등 위협 요인
+
+응답 형식 (JSON):
+{{
+  "strengths": ["강점 항목1", "강점 항목2"],
+  "weaknesses": ["약점 항목1", "약점 항목2"],
+  "opportunities": ["기회 항목1", "기회 항목2"],
+  "threats": ["위협 항목1", "위협 항목2"]
+}}"""
+
+        try:
+            response = self._call_claude(system_prompt, user_message, temperature=0.5)
+            data = self._extract_json(response)
+            result: Dict[str, List[str]] = {
+                "strengths": [],
+                "weaknesses": [],
+                "opportunities": [],
+                "threats": [],
+            }
+            for key in result:
+                val = data.get(key, [])
+                if isinstance(val, list):
+                    result[key] = [str(item) for item in val]
+                elif isinstance(val, str) and val:
+                    result[key] = [val]
+            return result
+        except Exception as e:
+            logger.error("generate_swot_list 실패: %s", e)
+            return {"strengths": [], "weaknesses": [], "opportunities": [], "threats": []}
+
+    def generate_relevance_analysis(
+        self,
+        resume: str,
+        chunks: list,
+        company: str = "",
+        industry: str = "",
+        job_title: str = "",
+    ) -> str:
+        """자소서 + 뉴스 청크 기반 산업 연관성 분석 (마크다운 반환).
+
+        프론트엔드 IndustryAnalysis 컴포넌트의 relevance_analysis 필드에 사용.
+
+        Args:
+            resume:    자소서 원문
+            chunks:    NewsChunk 리스트
+            company:   지원 기업
+            industry:  희망 산업
+            job_title: 희망 직무
+
+        Returns:
+            마크다운 문자열 (### 섹션 구조)
+        """
+        if not chunks:
+            return ""
+
+        context = "\n\n".join(
+            f"[{i + 1}] {c.chunk_text[:400]}"
+            for i, c in enumerate(chunks[:10])
+        )
+
+        meta = ""
+        if company:
+            meta += f"지원 기업: {company}\n"
+        if industry:
+            meta += f"희망 산업: {industry}\n"
+        if job_title:
+            meta += f"희망 직무: {job_title}\n"
+
+        system_prompt = """당신은 취업 전략 전문가입니다.
+지원자의 자소서와 관련 뉴스 기사를 분석해 산업 연관성 리포트를 작성합니다.
+마크다운 ### 섹션 구조로 응답하세요."""
+
+        user_message = f"""다음 정보를 바탕으로 산업 연관성 분석을 작성하세요.
+
+{meta}
+[자소서 발췌]
+{resume[:1500]}
+
+[관련 뉴스 발췌]
+{context}
+
+다음 ### 섹션을 포함해 마크다운으로 작성하세요:
+### 산업 트렌드 요약
+### 역량-트렌드 연결 포인트
+### 면접 활용 키워드"""
+
+        try:
+            return self._call_claude(system_prompt, user_message, temperature=0.5)
+        except Exception as e:
+            logger.error("generate_relevance_analysis 실패: %s", e)
+            return ""
+
+    def generate_final_report(
+        self,
+        resume: str,
+        company: str,
+        job_title: str,
+        industry: str,
+        swot: Dict[str, List[str]],
+        news_titles: List[str],
+    ) -> str:
+        """면접 준비 포인트 + 최종 권고사항 리포트 (마크다운 반환).
+
+        프론트엔드 FinalReportSummary 컴포넌트에서
+        '면접 준비 포인트'와 '최종 권고사항' 섹션을 파싱해 사용.
+
+        Returns:
+            마크다운 문자열 (번호 섹션 구조)
+        """
+        swot_summary = (
+            f"강점: {', '.join(swot.get('strengths', [])[:2])}\n"
+            f"약점: {', '.join(swot.get('weaknesses', [])[:2])}\n"
+            f"기회: {', '.join(swot.get('opportunities', [])[:2])}\n"
+            f"위협: {', '.join(swot.get('threats', [])[:2])}"
+        )
+        news_summary = "\n".join(f"- {t}" for t in news_titles[:5])
+
+        system_prompt = """당신은 취업 면접 코치입니다.
+지원자 정보와 SWOT 분석 결과를 바탕으로 실전 면접 전략 리포트를 작성합니다.
+번호 섹션(1. 제목) 구조의 마크다운으로 응답하세요."""
+
+        user_message = f"""다음 정보를 바탕으로 면접 준비 리포트를 작성하세요.
+
+지원 기업: {company}
+희망 직무: {job_title}
+희망 산업: {industry}
+
+SWOT 요약:
+{swot_summary}
+
+관련 뉴스 주요 제목:
+{news_summary}
+
+[자소서 발췌]
+{resume[:1000]}
+
+다음 두 섹션을 포함해 마크다운으로 작성하세요:
+1. 면접 준비 포인트
+   - 예상 질문 3개 (각 질문에 답변 포인트 포함)
+   - 강조해야 할 역량과 뉴스 연결 전략
+
+2. 최종 권고사항
+   - 지원자가 반드시 준비해야 할 3가지 핵심 사항
+   - 차별화 전략"""
+
+        try:
+            return self._call_claude(system_prompt, user_message, temperature=0.6)
+        except Exception as e:
+            logger.error("generate_final_report 실패: %s", e)
+            return ""
+
     def analyze_resume(self, resume: str) -> Dict[str, Any]:
         """Extract structured information from a resume or cover letter.
 
@@ -482,7 +700,7 @@ class LLMService:
         try:
             response = self.client.messages.create(
                 model="claude-haiku-4-5-20251001",
-                max_tokens=600,
+                max_tokens=1024,
                 temperature=0.3,
                 system=system_prompt,
                 messages=[{"role": "user", "content": user_message}],

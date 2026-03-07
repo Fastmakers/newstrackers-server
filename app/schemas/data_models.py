@@ -9,6 +9,47 @@ from typing import List, Literal, Optional
 from pydantic import BaseModel, ConfigDict, Field
 
 # ============================================================================
+# Report Models (프론트엔드 /api/v1/analysis/report 전용)
+# ============================================================================
+
+class ResumeProfile(BaseModel):
+    """자소서에서 추출한 지원자 프로필 — ReportResponse에서 사용."""
+    company: str = ""
+    job_title: str = ""
+    industry: str = ""
+    skills: List[str] = []
+    experiences: List[str] = []
+
+
+class MatchedNewsItem(BaseModel):
+    """하이브리드 검색 결과 뉴스 아이템 — ReportResponse에서 사용."""
+    id: int = 0
+    title: str = ""
+    job_category: str = ""
+    published_at: Optional[datetime] = None
+    url: str = ""
+    distance: float = 0.0   # 코사인 거리 0.0~1.0 (낮을수록 유사)
+
+
+class SWOTList(BaseModel):
+    """프론트엔드용 SWOT — 각 항목이 List[str] (기존 SWOT의 string 필드와 구분)."""
+    strengths: List[str] = []
+    weaknesses: List[str] = []
+    opportunities: List[str] = []
+    threats: List[str] = []
+
+
+class ReportResponse(BaseModel):
+    """POST /api/v1/analysis/report 응답 스키마 — 프론트엔드와 1:1 매핑."""
+    resume_profile: ResumeProfile
+    matched_news: List[MatchedNewsItem] = []
+    matched_news_count: int = 0
+    relevance_analysis: str = ""
+    swot: SWOTList
+    final_report: str = ""
+
+
+# ============================================================================
 # News Data Models
 # ============================================================================
 
@@ -42,13 +83,14 @@ class NewsArticle(BaseModel):
 
 
 class NewsChunk(BaseModel):
-    """뉴스 청크 도메인 모델 (SPEC: docs/SPEC_SEARCH.md §2)"""
+    """뉴스 청크 도메인 모델"""
     id: int
     article_id: int
     chunk_no: int
     chunk_text: str
     chunk_chars: int
     article: Optional[NewsArticle] = None
+    distance: float = 0.0   # 코사인 거리 (벡터 검색 결과에서 전파)
 
 
 class Keyword(BaseModel):
@@ -59,59 +101,17 @@ class Keyword(BaseModel):
     articles_count: Optional[int] = None
 
 
-class MonthlySentiment(BaseModel):
-    """Monthly sentiment data"""
-    month: str = Field(..., pattern=r"^\d{4}-\d{2}$")  # YYYY-MM format
-    intensity: int = Field(..., ge=0, le=10)
-    score: float = Field(..., ge=0, le=10)
-    issue: str
-
-
-class SourceStats(BaseModel):
-    """Statistics about news sources"""
-    total_articles: int
-    top_sources: List[str]
-    last_updated: datetime
-
-
 class IndustryData(BaseModel):
     """Industry trend analysis output"""
-    model_config = ConfigDict(json_schema_extra={
-        "example": {
-            "industry": "반도체",
-            "period": {"from": "2025-02-16", "to": "2026-02-16"},
-            "trends": ["Trend 1", "Trend 2", "Trend 3"],
-            "keywords": [{"word": "HBM3E", "type": "tech", "weight": 95}],
-            "monthly_sentiment": [
-                {"month": "2025-01", "intensity": 8, "score": 8.5, "issue": "..."}
-            ]
-        }
-    })
-    
     industry: str
-    period: dict = Field(default_factory=dict)
     trends: List[str] = Field(..., min_length=3, max_length=3)
     keywords: List[Keyword]
-    monthly_sentiment: List[MonthlySentiment]
-    source_stats: Optional[SourceStats] = None
+    article_count: int = 0
 
 
 # ============================================================================
 # Company Analysis Models
 # ============================================================================
-
-class RadarChart(BaseModel):
-    """5-dimension scoring for companies"""
-    labels: List[str] = Field(default=[
-        "성장성", "안정성", "혁신성", "ESG", "시장점유율"
-    ])
-    scores: List[float] = Field(..., min_length=5, max_length=5)
-    
-    def validate_scores(self):
-        for score in self.scores:
-            if not (0 <= score <= 10):
-                raise ValueError(f"Score must be between 0 and 10, got {score}")
-
 
 class SWOT(BaseModel):
     """SWOT Analysis"""
@@ -129,13 +129,6 @@ class InterviewQNA(BaseModel):
     difficulty: str = Field(default="medium", pattern="^(easy|medium|hard)$")
 
 
-class RiskAssessment(BaseModel):
-    """Company risk and opportunity assessment"""
-    critical_risks: List[str]
-    growth_opportunities: List[str]
-    recommended_focus: str
-
-
 class CompanyNewsArticle(BaseModel):
     """Single news article for company analysis"""
     title: str
@@ -143,43 +136,14 @@ class CompanyNewsArticle(BaseModel):
     source: str
 
 
-class CompanyInfo(BaseModel):
-    """Basic company information"""
-    description: str
-    market_cap: Optional[str] = None
-    employees: Optional[int] = None
-
-
 class CompanyAnalysis(BaseModel):
     """Company analysis output (for interview preparation)"""
-    model_config = ConfigDict(json_schema_extra={
-        "example": {
-            "company": "삼성전자",
-            "industry": "반도체",
-            "analysis_date": "2026-02-16T10:00:00Z",
-            "radar_chart": {
-                "labels": ["성장성", "안정성", "혁신성", "ESG", "시장점유율"],
-                "scores": [8, 7, 9, 6, 8]
-            },
-            "swot": {
-                "strengths": "...",
-                "weaknesses": "...",
-                "opportunities": "...",
-                "threats": "..."
-            },
-            "interview_qna": [{"question": "...", "guide": "..."}]
-        }
-    })
-    
     company: str
     industry: str
     analysis_date: datetime = Field(default_factory=datetime.now)
-    company_info: Optional[CompanyInfo] = None
-    radar_chart: RadarChart
     swot: SWOT
-    recent_news_themes: List[str]
     interview_qna: List[InterviewQNA]
-    risk_assessment: RiskAssessment
+    article_count: int = 0
     news_sources: Optional[List[CompanyNewsArticle]] = None
 
 

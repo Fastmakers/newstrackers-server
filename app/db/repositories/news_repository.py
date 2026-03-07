@@ -56,31 +56,35 @@ class NewsRepository:
         embedding: list[float],
         category_l2: Optional[str] = None,
         limit: int = 100,
-    ) -> list[tuple[NewsChunkDB, NewsArticleDB]]:
+    ) -> list[tuple[NewsChunkDB, NewsArticleDB, float]]:
         """코사인 유사도 벡터 검색 — V1/V2/V3 공통.
 
         HNSW 인덱스 활용을 위해 서브쿼리로 먼저 Top-N을 뽑은 뒤 JOIN.
         (JOIN + ORDER BY 구조에서는 플래너가 HNSW를 Seq Scan으로 대체함)
+
+        Returns: (chunk, article, cosine_distance) 튜플 리스트
         """
+        cos_dist = NewsChunkDB.embedding.cosine_distance(embedding)
+
         # Step 1: HNSW로 Top-N chunk id만 추출 (JOIN 없이)
         inner = (
             select(NewsChunkDB.id)
             .where(NewsChunkDB.embedding.is_not(None))
-            .order_by(NewsChunkDB.embedding.cosine_distance(embedding))
+            .order_by(cos_dist)
             .limit(limit)
         ).subquery()
 
-        # Step 2: 추출된 id로 JOIN (너무 짧은 청크 제외)
+        # Step 2: 추출된 id로 JOIN + 거리 컬럼 포함
         stmt = (
-            select(NewsChunkDB, NewsArticleDB)
+            select(NewsChunkDB, NewsArticleDB, cos_dist.label("distance"))
             .join(inner, NewsChunkDB.id == inner.c.id)
             .join(NewsArticleDB, NewsChunkDB.article_id == NewsArticleDB.id)
             .where(func.length(NewsChunkDB.chunk_text) >= 100)
         )
         if category_l2:
             stmt = stmt.where(NewsArticleDB.category_l2 == category_l2)
-        stmt = stmt.order_by(NewsChunkDB.embedding.cosine_distance(embedding))
-        return [(row[0], row[1]) for row in self._session.execute(stmt)]
+        stmt = stmt.order_by(cos_dist)
+        return [(row[0], row[1], float(row[2])) for row in self._session.execute(stmt)]
 
     def search_chunks_by_keyword(
         self,

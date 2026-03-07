@@ -3,30 +3,34 @@ Test configuration and fixtures
 """
 
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime
 from unittest.mock import MagicMock
 
 import pytest
 
-from app.analysis.company_analyzer import CompanyAnalyzer
-from app.analysis.industry_analyzer import IndustryAnalyzer
 from app.schemas.data_models import (
     SWOT,
     CompanyAnalysis,
     IndustryData,
     InterviewQNA,
     Keyword,
-    MonthlySentiment,
+    MatchedNewsItem,
     NewsArticle,
-    RadarChart,
+    ReportResponse,
+    ResumeProfile,
+    SWOTList,
 )
 from app.services.llm_service import LLMService
 from app.services.news_service import NewsService
 
 
+# ---------------------------------------------------------------------------
+# 뉴스 기사 fixture
+# ---------------------------------------------------------------------------
+
 @pytest.fixture
 def sample_articles():
-    """Fixture: Sample news articles (매경 2025 schema)"""
+    """매경 스키마 기반 샘플 뉴스 기사."""
     return [
         NewsArticle(
             id=1,
@@ -57,7 +61,6 @@ def sample_articles():
 
 @pytest.fixture
 def sample_keywords():
-    """Fixture: Sample keywords"""
     return [
         Keyword(word="HBM3E", type="tech", weight=95),
         Keyword(word="삼성전자", type="corp", weight=90),
@@ -66,47 +69,12 @@ def sample_keywords():
     ]
 
 
-@pytest.fixture
-def sample_monthly_sentiment():
-    """Fixture: Sample monthly sentiment data"""
-    sentiments = []
-    base_date = datetime.now()
-    for i in range(12):
-        month = (base_date - timedelta(days=30 * i)).strftime("%Y-%m")
-        sentiments.insert(0, MonthlySentiment(
-            month=month,
-            intensity=5 + (i % 5),
-            score=float(6 + (i % 4)),
-            issue=f"Issue {i}",
-        ))
-    return sentiments
-
-
-@pytest.fixture
-def sample_industry_data(sample_keywords, sample_monthly_sentiment):
-    """Fixture: Sample industry analysis data"""
-    return IndustryData(
-        industry="반도체",
-        period={"from": "2025-02-16", "to": "2026-02-16"},
-        trends=[
-            "HBM 기술 경쟁 심화",
-            "AI칩셋 시장 급성장",
-            "정부 지원정책 강화",
-        ],
-        keywords=sample_keywords,
-        monthly_sentiment=sample_monthly_sentiment,
-    )
-
-
-@pytest.fixture
-def sample_radar_chart():
-    """Fixture: Sample radar chart data"""
-    return RadarChart(scores=[8, 7, 9, 6, 8])
-
+# ---------------------------------------------------------------------------
+# 기존 엔드포인트(/analysis/company) 관련 fixture
+# ---------------------------------------------------------------------------
 
 @pytest.fixture
 def sample_swot():
-    """Fixture: Sample SWOT analysis"""
     return SWOT(
         strengths="강점 내용",
         weaknesses="약점 내용",
@@ -117,7 +85,6 @@ def sample_swot():
 
 @pytest.fixture
 def sample_interview_qna():
-    """Fixture: Sample interview Q&A"""
     return [
         InterviewQNA(
             question="회사의 도전과제에 어떻게 대처하겠습니까?",
@@ -129,60 +96,106 @@ def sample_interview_qna():
 
 
 @pytest.fixture
-def sample_company_analysis(sample_radar_chart, sample_swot, sample_interview_qna):
-    """Fixture: Sample company analysis"""
+def sample_company_analysis(sample_swot, sample_interview_qna):
     return CompanyAnalysis(
         company="삼성전자",
         industry="반도체",
         analysis_date=datetime.now(),
-        radar_chart=sample_radar_chart,
         swot=sample_swot,
-        recent_news_themes=["HBM3E 생산", "AI칩 개발"],
         interview_qna=sample_interview_qna,
-        risk_assessment={
-            "critical_risks": ["기술 경쟁", "시장 변화"],
-            "growth_opportunities": ["AI 시장", "신기술"],
-            "recommended_focus": "기술 혁신 중심",
-        },
+        article_count=10,
     )
 
 
-# --- DI-based mock fixtures ---
+@pytest.fixture
+def sample_industry_data(sample_keywords):
+    return IndustryData(
+        industry="반도체",
+        trends=["HBM 기술 경쟁 심화", "AI칩셋 시장 급성장", "정부 지원정책 강화"],
+        keywords=sample_keywords,
+        article_count=100,
+    )
+
+
+# ---------------------------------------------------------------------------
+# /report 엔드포인트 관련 fixture
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def sample_resume_profile():
+    return ResumeProfile(
+        company="삼성전자",
+        job_title="백엔드 개발자",
+        industry="반도체",
+        skills=["Python", "FastAPI", "PostgreSQL"],
+        experiences=["3년 백엔드 개발 경험", "MSA 설계 및 운영"],
+    )
+
+
+@pytest.fixture
+def sample_swot_list():
+    return SWOTList(
+        strengths=["HBM 기술 리더십", "강한 R&D"],
+        weaknesses=["높은 제조 비용"],
+        opportunities=["AI 서버 수요 급증"],
+        threats=["TSMC 기술 격차"],
+    )
+
+
+@pytest.fixture
+def sample_matched_news():
+    return [
+        MatchedNewsItem(
+            id=1,
+            title="삼성전자 HBM3E 양산 확대",
+            job_category="IT/기술",
+            published_at=datetime(2026, 2, 15),
+            url="https://example.com/1",
+            distance=0.15,
+        ),
+        MatchedNewsItem(
+            id=2,
+            title="반도체 정책 지원 발표",
+            job_category="경제",
+            published_at=datetime(2026, 2, 14),
+            url="https://example.com/2",
+            distance=0.28,
+        ),
+    ]
+
+
+@pytest.fixture
+def sample_report_response(sample_resume_profile, sample_swot_list, sample_matched_news):
+    return ReportResponse(
+        resume_profile=sample_resume_profile,
+        matched_news=sample_matched_news,
+        matched_news_count=len(sample_matched_news),
+        relevance_analysis="### 산업 트렌드 요약\nHBM 시장 성장 중.",
+        swot=sample_swot_list,
+        final_report="1. 면접 준비 포인트\n- HBM 언급\n\n2. 최종 권고사항\n- 차별화 강조",
+    )
+
+
+# ---------------------------------------------------------------------------
+# 서비스 mock fixture
+# ---------------------------------------------------------------------------
 
 @pytest.fixture
 def mock_news_service():
-    """Mock NewsService for testing."""
     return MagicMock(spec=NewsService)
 
 
 @pytest.fixture
 def mock_llm_service():
-    """Mock LLMService for testing."""
     return MagicMock(spec=LLMService)
 
 
-@pytest.fixture
-def industry_analyzer(mock_news_service, mock_llm_service):
-    """IndustryAnalyzer with mocked dependencies."""
-    return IndustryAnalyzer(
-        news_service=mock_news_service,
-        llm_service=mock_llm_service,
-    )
+# ---------------------------------------------------------------------------
+# 로깅 설정
+# ---------------------------------------------------------------------------
 
-
-@pytest.fixture
-def company_analyzer(mock_news_service, mock_llm_service):
-    """CompanyAnalyzer with mocked dependencies."""
-    return CompanyAnalyzer(
-        news_service=mock_news_service,
-        llm_service=mock_llm_service,
-    )
-
-
-# Logging configuration
 @pytest.fixture(scope="session", autouse=True)
 def setup_logging():
-    """Setup logging for tests"""
     logging.basicConfig(
         level=logging.DEBUG,
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",

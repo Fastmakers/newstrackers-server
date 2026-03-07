@@ -27,8 +27,7 @@ python3 -m pytest --cov=app --cov-report=term-missing tests/
 - 외부 API(뉴스/LLM) 호출 테스트는 대부분 목(mock) 기반입니다.
 - 실제 API 키 기반 E2E 검증은 별도 환경에서 수행하세요.
 
-## Spec-Driven 운영
+## 명세서
 
-- 스펙 문서: `SPEC.md`
-- 추적 매트릭스: `docs/SPEC_TRACEABILITY.md`
-- 구현 완료 항목은 최소 1개 테스트 ID를 연결하세요.
+- 인덱스: `SPEC.md` → `docs/` 디렉터리
+- API 명세: `docs/03_api_spec.md`

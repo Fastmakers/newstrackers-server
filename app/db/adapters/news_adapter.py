@@ -1,8 +1,4 @@
-"""
-뉴스 어댑터 — DB Row → Domain Model 변환.
-
-SPEC: docs/SPEC_SEARCH.md §2, §6
-"""
+"""뉴스 어댑터 — DB Row → Domain Model 변환."""
 
 from __future__ import annotations
 
@@ -61,6 +57,7 @@ def article_row_to_domain(row: "NewsArticleDB") -> NewsArticle:
 def chunk_row_to_domain(
     row: "NewsChunkDB",
     article: NewsArticle | None = None,
+    distance: float = 0.0,
 ) -> NewsChunk:
     """NewsChunkDB ORM → NewsChunk 도메인 모델."""
     return NewsChunk(
@@ -70,4 +67,5 @@ def chunk_row_to_domain(
         chunk_text=row.chunk_text or "",
         chunk_chars=row.chunk_chars or 0,
         article=article,
+        distance=distance,
     )

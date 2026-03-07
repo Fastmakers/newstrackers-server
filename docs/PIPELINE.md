@@ -42,8 +42,11 @@
         ▼
 ┌─────────────────────────────────────┐
 │  Phase 5. LLM 분석 (실시간)          │
-│  - IndustryAnalyzer                 │
-│  - CompanyAnalyzer                  │
+│  LLMService (app/services/)         │
+│  - extract_trends / extract_keywords │
+│  - generate_swot_list               │
+│  - generate_relevance_analysis      │
+│  - generate_final_report            │
 └─────────────────────────────────────┘
         │
         ▼
@@ -230,31 +233,43 @@ python scripts/extract_ner.py --all --save
 ## Phase 5. LLM 분석 (실시간)
 
 검색된 청크를 컨텍스트로 Claude에게 분석을 요청한다.
+모든 LLM 호출은 `app/services/llm_service.py` (`LLMService`) 에서 처리한다.
 
-### IndustryAnalyzer — `app/analysis/industry_analyzer.py`
+### 산업 분석 — Pipeline A (`/analysis/industry`)
 
 ```
 hybrid_search 결과 (뉴스 청크)
     │
-    ├─ 키워드 추출 (LLM)
-    ├─ 월별 감정 분석 (heuristic + LLM)
-    └─ 산업 트렌드 요약 (LLM)
+    ├─ extract_trends(articles, industry)    → 트렌드 3문장 (Claude Sonnet)
+    └─ extract_keywords(articles)            → [{word, type, weight}] (Claude Sonnet)
         → IndustryData 반환
 ```
 
-### CompanyAnalyzer — `app/analysis/company_analyzer.py`
+### 기업 분석 — Pipeline B (`/analysis/company`)
 
 ```
 hybrid_search 결과 (뉴스 청크)
     │
-    ├─ SWOT 분석 (LLM)
-    ├─ 5차원 레이더 점수 (heuristic)
-    ├─ 최근 뉴스 테마 추출 (LLM)
-    └─ 면접 Q&A 생성 (LLM)
+    ├─ generate_swot_analysis(company, articles)       → SWOT string (Claude Sonnet)
+    └─ generate_interview_questions(company, resume, articles) → Q&A 리스트 (Claude Sonnet)
         → CompanyAnalysis 반환
 ```
 
-**LLM 모델:** `claude-sonnet-4-6`
+### 종합 리포트 — Pipeline E (`/analysis/report`, 프론트 전용)
+
+```
+hybrid_search 결과 (뉴스 청크)
+    │  ThreadPoolExecutor
+    ├─ generate_swot_list(resume, company, job_title, chunks, industry)
+    │       → Dict[str, List[str]]  ← 지원자 관점 SWOT (Claude Sonnet)
+    ├─ generate_relevance_analysis(resume, chunks, company, industry, job_title)
+    │       → markdown string (Claude Sonnet)
+    └─ generate_final_report(resume, company, job_title, industry, swot, news_titles)
+            → markdown string (Claude Sonnet)
+        → ReportResponse 반환
+```
+
+**LLM 모델:** `claude-sonnet-4-6` (분석), `claude-haiku-4-5` (빠른 전처리)
 
 ---
 
@@ -268,14 +283,12 @@ FastAPI (app/api/v1/endpoints/)
     │
     ▼
 Service Layer (app/services/)
-    ├── NewsService        — 뉴스 검색
-    └── LLMService         — Claude API 호출
+    ├── NewsService        — 뉴스 검색 (hybrid_search)
+    └── LLMService         — Claude API 호출 + SSE 스트리밍
     │
     ▼
-Analysis Layer (app/analysis/)
-    ├── IndustryAnalyzer   — 산업 분석
-    ├── CompanyAnalyzer    — 기업 분석
-    ├── LexicalDiversityAnalyzer — 데이터 품질
+Analysis Layer (app/analysis/) — 오프라인 배치 전용
+    ├── LexicalDiversityAnalyzer — 데이터 품질 (LogTTR)
     ├── NgramExtractor     — TF-IDF 키워드
     ├── NerExtractor       — NER/POS
     └── TextCleaner        — 텍스트 정제
@@ -291,7 +304,7 @@ DB Layer (app/db/)
     │
     ▼
 PostgreSQL (AWS RDS)
-    ├── news_articles      — 187,884건
+    ├── news_articles      — 188,379건
     └── news_chunks        — 335,073건 (pgvector)
 ```
 
@@ -299,20 +312,26 @@ PostgreSQL (AWS RDS)
 
 ## 파일 목록
 
+### 오프라인 배치 (Phase 1~3)
+
 | 파일 | 역할 |
 |---|---|
 | `app/analysis/text_cleaner.py` | Regex 노이즈 제거 |
 | `app/analysis/lexical_diversity.py` | LogTTR 노이즈 탐지 |
 | `app/analysis/ngram_extractor.py` | TF-IDF N-gram 키워드 |
 | `app/analysis/ner_extractor.py` | NER + POS 동사 추출 |
-| `app/analysis/industry_analyzer.py` | 산업 동향 분석 (LLM) |
-| `app/analysis/company_analyzer.py` | 기업 분석 (LLM) |
-| `app/services/news_service.py` | 하이브리드 검색 |
-| `app/services/search/rrf.py` | RRF 융합 |
-| `app/db/repositories/news_repository.py` | DB 쿼리 |
 | `scripts/analyze_lexical_diversity.py` | LogTTR 배치 분석 |
 | `scripts/extract_ngrams.py` | TF-IDF 배치 추출 |
 | `scripts/extract_ner.py` | NER 배치 추출 |
 | `data/lexical_diversity.json` | 노이즈 기사 ID 목록 |
 | `data/ngrams.json` | 카테고리별 키워드 |
 | `data/ner_result.json` | ORG·PERSON·LOC·동사 |
+
+### 실시간 API (Phase 4~5)
+
+| 파일 | 역할 |
+|---|---|
+| `app/services/news_service.py` | 하이브리드 검색 (V1/V2/V3) |
+| `app/services/llm_service.py` | Claude API 호출 전체 |
+| `app/services/search/rrf.py` | RRF 융합 (k=60) |
+| `app/db/repositories/news_repository.py` | DB 쿼리 (vector/trgm) |
