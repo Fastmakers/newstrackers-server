@@ -158,10 +158,10 @@ class TestGenerateFinalReport:
         "opportunities": ["AI 시장 성장"],
         "threats": ["TSMC 기술 격차"],
     }
-    NEWS_TITLES = ["삼성전자 HBM3E 양산 확대", "반도체 정책 지원 발표"]
+    RELEVANCE = "### 산업 트렌드 요약\nHBM 시장 급성장 중."
 
     def test_returns_markdown_string(self, llm):
-        mock_report = "## 1. 면접 준비 포인트\n- HBM 기술 강조\n\n## 2. 최종 권고사항\n- 기술 차별화 준비"
+        mock_report = "## 면접 준비 포인트\n### Q1. HBM 관련 질문\n배경.\n**핵심 답변 방향:** 답변.\n\n## 최종 권고사항\n### 핵심 준비 사항\n1. **항목** — 내용."
         with patch.object(llm, "_call_claude", return_value=mock_report):
             result = llm.generate_final_report(
                 resume="이력서 내용",
@@ -169,7 +169,7 @@ class TestGenerateFinalReport:
                 job_title="메모리 엔지니어",
                 industry="반도체",
                 swot=self.SWOT_DATA,
-                news_titles=self.NEWS_TITLES,
+                relevance_analysis=self.RELEVANCE,
             )
 
         assert "면접 준비 포인트" in result
@@ -183,7 +183,7 @@ class TestGenerateFinalReport:
                 job_title="직무",
                 industry="산업",
                 swot=self.SWOT_DATA,
-                news_titles=self.NEWS_TITLES,
+                relevance_analysis="",
             )
 
         assert result == ""
@@ -196,7 +196,7 @@ class TestGenerateFinalReport:
                 job_title="개발자",
                 industry="AI",
                 swot=self.SWOT_DATA,
-                news_titles=self.NEWS_TITLES,
+                relevance_analysis=self.RELEVANCE,
             )
 
         mock_call.assert_called_once()
@@ -209,7 +209,7 @@ class TestGenerateFinalReport:
                 job_title="엔지니어",
                 industry="IT",
                 swot={"strengths": [], "weaknesses": [], "opportunities": [], "threats": []},
-                news_titles=[],
+                relevance_analysis="",
             )
 
         assert isinstance(result, str)

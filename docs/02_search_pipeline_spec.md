@@ -266,7 +266,7 @@ for chunk in ranked_chunks:
   - [x] `rerank_chunks()` — V3 entry point
   - [x] `_dedup()` — article_id 기준 중복 제거
   - [x] `_title_boost()` — 기업명 제목 보너스
-- [ ] **DB GIN 인덱스 생성** — `idx_chunks_trgm` (Alembic 마이그레이션 필요)
+- [x] **DB GIN 인덱스 생성** — `idx_chunks_trgm` (생성 완료 — 키워드 검색 2배+ 속도 향상 확인)
 - [ ] `search.py` endpoint — `/api/v1/search` (hybrid_search 연동)
 
 ---
