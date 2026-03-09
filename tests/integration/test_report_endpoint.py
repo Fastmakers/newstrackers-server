@@ -1,6 +1,6 @@
 """
 Integration tests — POST /api/v1/analysis/report 엔드포인트
-모든 외부 의존성(LLMService, NewsService)은 mock 처리
+모든 외부 의존성(ReportPipeline 내부 서비스)은 mock 처리
 """
 
 import io
@@ -12,8 +12,9 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
-from app.core.dependencies import get_llm_service, get_news_service
+from app.core.dependencies import get_report_pipeline
 from app.schemas.data_models import NewsChunk, NewsArticle
+from app.services.report_pipeline import ReportPipeline
 
 
 # ---------------------------------------------------------------------------
@@ -36,7 +37,6 @@ def make_mock_chunk(article_id: int, title: str, distance: float = 0.2):
 
 def make_pdf_bytes(text: str = "자소서 내용입니다.") -> bytes:
     """pypdf가 파싱할 수 있는 최소 PDF 바이트 생성."""
-    # 실제 PDF 대신 pypdf mock을 사용하므로 임의 바이트로 충분
     return b"%PDF-1.4 fake content " + text.encode()
 
 
@@ -45,51 +45,59 @@ def make_pdf_bytes(text: str = "자소서 내용입니다.") -> bytes:
 # ---------------------------------------------------------------------------
 
 @pytest.fixture
-def mock_llm():
-    service = MagicMock(spec=["analyze_resume", "transform_query",
-                               "generate_swot_list", "generate_relevance_analysis",
-                               "generate_final_report"])
-    service.analyze_resume.return_value = {
+def mock_resume_analyzer():
+    svc = MagicMock()
+    svc.analyze_resume.return_value = {
         "skills": ["Python", "FastAPI"],
         "experience_keywords": ["3년 백엔드 개발", "MSA 설계"],
         "target_role": "백엔드 개발자",
         "strengths": ["문제 해결력", "협업 능력"],
         "search_keywords": ["삼성전자", "반도체", "소프트웨어"],
     }
-    service.transform_query.return_value = {
+    svc.transform_query.return_value = {
         "keywords": ["삼성전자", "소프트웨어"],
         "query": "삼성전자 소프트웨어 개발 AI 전략",
     }
-    service.generate_swot_list.return_value = {
+    return svc
+
+
+@pytest.fixture
+def mock_report_generator():
+    svc = MagicMock()
+    svc.generate_swot_list.return_value = {
         "strengths": ["HBM 기술 리더십", "강한 R&D"],
         "weaknesses": ["높은 제조 비용"],
         "opportunities": ["AI 서버 수요"],
         "threats": ["TSMC 기술 격차"],
     }
-    service.generate_relevance_analysis.return_value = (
+    svc.generate_relevance_analysis.return_value = (
         "### 산업 트렌드 요약\nHBM 시장 성장.\n\n### 역량-트렌드 연결 포인트\n개발 역량 연결."
     )
-    service.generate_final_report.return_value = (
-        "1. 면접 준비 포인트\n- HBM 기술 언급\n\n2. 최종 권고사항\n- 기술 차별화 강조"
+    svc.generate_final_report.return_value = (
+        "## 면접 준비 포인트\n- HBM 기술 언급\n\n## 최종 권고사항\n- 기술 차별화 강조"
     )
-    return service
+    return svc
 
 
 @pytest.fixture
 def mock_news():
-    service = MagicMock(spec=["hybrid_search"])
-    service.hybrid_search.return_value = [
+    svc = MagicMock()
+    svc.hybrid_search.return_value = [
         make_mock_chunk(1, "삼성전자 HBM3E 양산 확대", 0.15),
         make_mock_chunk(2, "반도체 정책 지원 발표", 0.28),
         make_mock_chunk(3, "AI 서버 수요 급증", 0.32),
     ]
-    return service
+    return svc
 
 
 @pytest.fixture
-def client(mock_llm, mock_news):
-    app.dependency_overrides[get_llm_service] = lambda: mock_llm
-    app.dependency_overrides[get_news_service] = lambda: mock_news
+def client(mock_resume_analyzer, mock_report_generator, mock_news):
+    pipeline = ReportPipeline(
+        news_service=mock_news,
+        resume_analyzer=mock_resume_analyzer,
+        report_generator=mock_report_generator,
+    )
+    app.dependency_overrides[get_report_pipeline] = lambda: pipeline
     with TestClient(app) as c:
         yield c
     app.dependency_overrides.clear()
@@ -205,13 +213,13 @@ class TestReportEndpointSuccess:
         self._post_report(client)
         mock_news.hybrid_search.assert_called_once()
 
-    def test_llm_pipeline_called_in_order(self, client, mock_llm):
+    def test_llm_pipeline_called_in_order(self, client, mock_resume_analyzer, mock_report_generator):
         self._post_report(client)
-        mock_llm.analyze_resume.assert_called_once()
-        mock_llm.transform_query.assert_called_once()
-        mock_llm.generate_swot_list.assert_called_once()
-        mock_llm.generate_relevance_analysis.assert_called_once()
-        mock_llm.generate_final_report.assert_called_once()
+        mock_resume_analyzer.analyze_resume.assert_called_once()
+        mock_resume_analyzer.transform_query.assert_called_once()
+        mock_report_generator.generate_swot_list.assert_called_once()
+        mock_report_generator.generate_relevance_analysis.assert_called_once()
+        mock_report_generator.generate_final_report.assert_called_once()
 
 
 # ---------------------------------------------------------------------------

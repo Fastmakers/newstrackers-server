@@ -20,8 +20,6 @@ from app.services.search.rrf import rrf_fuse
 
 logger = logging.getLogger(__name__)
 
-EMBEDDING_MODEL = "text-embedding-3-small"
-
 # V3: Cross-Encoder에 전달할 RRF 후보 수
 _V3_RERANK_POOL = 40
 
@@ -29,9 +27,9 @@ _V3_RERANK_POOL = 40
 class NewsService:
     """뉴스 검색 서비스 — 읽기 전용."""
 
-    def __init__(self, session_factory=None):
+    def __init__(self, session_factory=None, embedding_service=None):
         self._session_factory = session_factory
-        self._openai_client = None
+        self._embedding_service = embedding_service  # Injected or lazy-init
         self._reranker = None  # Lazy-load (V3 첫 호출 시)
 
     @property
@@ -177,15 +175,11 @@ class NewsService:
     # -------------------------------------------------------------------------
 
     def embed_query(self, text: str) -> list[float]:
-        """쿼리 텍스트 → OpenAI 임베딩 벡터 (text-embedding-3-small)."""
-        from app.core.config import settings
-        from openai import OpenAI
-        if self._openai_client is None:
-            if not settings.OPENAI_API_KEY:
-                raise ValueError("OPENAI_API_KEY가 설정되지 않았습니다.")
-            self._openai_client = OpenAI(api_key=settings.OPENAI_API_KEY)
-        response = self._openai_client.embeddings.create(model=EMBEDDING_MODEL, input=text)
-        return response.data[0].embedding
+        """쿼리 텍스트 → OpenAI 임베딩 벡터 (EmbeddingService 위임)."""
+        if self._embedding_service is None:
+            from app.services.embedding_service import EmbeddingService
+            self._embedding_service = EmbeddingService()
+        return self._embedding_service.embed_query(text)
 
     # -------------------------------------------------------------------------
     # 내부 검색 헬퍼 (각자 독립 DB 세션)

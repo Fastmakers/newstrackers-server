@@ -53,7 +53,7 @@ class TestGenerateSwotList:
             "opportunities": ["삼성전자 AI SW 부문 인력 확대"],
             "threats": ["경쟁자 대비 낮은 HBM 관련 기술 경험"],
         })
-        with patch.object(llm, "_call_claude", return_value=mock_resp):
+        with patch.object(llm._report_generator, "_call_claude", return_value=mock_resp):
             result = llm.generate_swot_list(
                 RESUME_TEXT, "삼성전자", "백엔드 개발자", sample_chunks, "반도체"
             )
@@ -82,14 +82,14 @@ class TestGenerateSwotList:
             "opportunities": [],
             "threats": [],
         })
-        with patch.object(llm, "_call_claude", return_value=mock_resp):
+        with patch.object(llm._report_generator, "_call_claude", return_value=mock_resp):
             result = llm.generate_swot_list(RESUME_TEXT, "삼성전자", "개발자", sample_chunks)
 
         assert isinstance(result["strengths"], list)
         assert result["strengths"] == ["단일 강점 문자열"]
 
     def test_invalid_json_returns_empty(self, llm, sample_chunks):
-        with patch.object(llm, "_call_claude", return_value="not valid json"):
+        with patch.object(llm._report_generator, "_call_claude", return_value="not valid json"):
             result = llm.generate_swot_list(RESUME_TEXT, "삼성전자", "개발자", sample_chunks)
 
         assert result == {
@@ -102,7 +102,7 @@ class TestGenerateSwotList:
     def test_all_quadrants_present_even_if_partial(self, llm, sample_chunks):
         """일부 quadrant만 있어도 4개 키 모두 반환."""
         mock_resp = json.dumps({"strengths": ["강점1"]})
-        with patch.object(llm, "_call_claude", return_value=mock_resp):
+        with patch.object(llm._report_generator, "_call_claude", return_value=mock_resp):
             result = llm.generate_swot_list(RESUME_TEXT, "테스트", "직무", sample_chunks)
 
         assert set(result.keys()) == {"strengths", "weaknesses", "opportunities", "threats"}
@@ -115,7 +115,7 @@ class TestGenerateSwotList:
 class TestGenerateRelevanceAnalysis:
     def test_returns_markdown_string(self, llm, sample_chunks):
         mock_md = "### 산업 트렌드 요약\nHBM 시장 성장.\n\n### 역량-트렌드 연결 포인트\n메모리 기술 역량."
-        with patch.object(llm, "_call_claude", return_value=mock_md):
+        with patch.object(llm._report_generator, "_call_claude", return_value=mock_md):
             result = llm.generate_relevance_analysis(
                 resume="3년간 반도체 설계 업무",
                 chunks=sample_chunks,
@@ -135,13 +135,13 @@ class TestGenerateRelevanceAnalysis:
         assert result == ""
 
     def test_calls_claude_once(self, llm, sample_chunks):
-        with patch.object(llm, "_call_claude", return_value="분석 결과") as mock_call:
+        with patch.object(llm._report_generator, "_call_claude", return_value="분석 결과") as mock_call:
             llm.generate_relevance_analysis("이력서", sample_chunks, "네이버", "AI", "개발자")
 
         mock_call.assert_called_once()
 
     def test_api_error_returns_empty_string(self, llm, sample_chunks):
-        with patch.object(llm, "_call_claude", side_effect=Exception("API timeout")):
+        with patch.object(llm._report_generator, "_call_claude", side_effect=Exception("API timeout")):
             result = llm.generate_relevance_analysis("이력서", sample_chunks)
 
         assert result == ""
@@ -162,7 +162,7 @@ class TestGenerateFinalReport:
 
     def test_returns_markdown_string(self, llm):
         mock_report = "## 면접 준비 포인트\n### Q1. HBM 관련 질문\n배경.\n**핵심 답변 방향:** 답변.\n\n## 최종 권고사항\n### 핵심 준비 사항\n1. **항목** — 내용."
-        with patch.object(llm, "_call_claude", return_value=mock_report):
+        with patch.object(llm._report_generator, "_call_claude", return_value=mock_report):
             result = llm.generate_final_report(
                 resume="이력서 내용",
                 company="삼성전자",
@@ -176,7 +176,7 @@ class TestGenerateFinalReport:
         assert "최종 권고사항" in result
 
     def test_api_error_returns_empty_string(self, llm):
-        with patch.object(llm, "_call_claude", side_effect=Exception("timeout")):
+        with patch.object(llm._report_generator, "_call_claude", side_effect=Exception("timeout")):
             result = llm.generate_final_report(
                 resume="이력서",
                 company="테스트",
@@ -189,7 +189,7 @@ class TestGenerateFinalReport:
         assert result == ""
 
     def test_calls_claude_once(self, llm):
-        with patch.object(llm, "_call_claude", return_value="리포트") as mock_call:
+        with patch.object(llm._report_generator, "_call_claude", return_value="리포트") as mock_call:
             llm.generate_final_report(
                 resume="이력서",
                 company="네이버",
@@ -202,7 +202,7 @@ class TestGenerateFinalReport:
         mock_call.assert_called_once()
 
     def test_empty_swot_handled_gracefully(self, llm):
-        with patch.object(llm, "_call_claude", return_value="리포트 내용"):
+        with patch.object(llm._report_generator, "_call_claude", return_value="리포트 내용"):
             result = llm.generate_final_report(
                 resume="이력서",
                 company="카카오",

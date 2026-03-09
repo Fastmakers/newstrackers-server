@@ -55,4 +55,4 @@ class TestServiceImports:
         service = NewsService(session_factory=MagicMock())
         assert service is not None
         assert hasattr(service, "get_articles")
-        assert hasattr(service, "search_similar")
+        assert hasattr(service, "hybrid_search")
