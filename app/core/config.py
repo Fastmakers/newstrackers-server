@@ -30,6 +30,11 @@ class Settings(BaseSettings):
     # Database
     DATABASE_URL: str = ""
 
+    # JWT (security.py 에서 사용)
+    SECRET_KEY: str = "your-secret-key-here-change-in-production"
+    ALGORITHM: str = "HS256"
+    ACCESS_TOKEN_EXPIRE_DAYS: int = 30
+
     # Logging
     LOG_LEVEL: str = "INFO"
     LOG_FILE: str = "./logs/app.log"

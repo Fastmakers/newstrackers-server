@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+import uuid
 from datetime import datetime
 from typing import Optional
 
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import BigInteger, DateTime, Float, ForeignKey, Index, Integer, Text
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.sql import func
 
 from app.db.base import Base
 
@@ -81,3 +83,73 @@ class NewsChunkDB(Base):
 
 # 하위 호환: 기존 코드가 NewsArticle 이름으로 import하던 것 유지
 NewsArticle = NewsArticleDB
+
+
+class AnalysisJobDB(Base):
+    """비동기 분석 Job 스케줄 테이블 (analysis_jobs)."""
+
+    __tablename__ = "analysis_jobs"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), nullable=True)
+
+    # pending | running | completed | failed
+    status: Mapped[str] = mapped_column(Text, nullable=False, default="pending")
+
+    # 입력 파라미터
+    company: Mapped[Optional[str]] = mapped_column(Text)
+    job_title: Mapped[Optional[str]] = mapped_column(Text)
+    industry: Mapped[Optional[str]] = mapped_column(Text)
+    career_level: Mapped[str] = mapped_column(Text, default="신입")
+    resume_text: Mapped[Optional[str]] = mapped_column(Text)
+
+    # 진행 상황
+    current_step: Mapped[Optional[int]] = mapped_column(Integer)
+    step_label: Mapped[Optional[str]] = mapped_column(Text)   # 단계 표시 문자열
+    step_detail: Mapped[Optional[str]] = mapped_column(Text)  # 상세 메시지
+    progress_pct: Mapped[int] = mapped_column(Integer, default=0)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    error_msg: Mapped[Optional[str]] = mapped_column(Text)
+
+    report: Mapped[Optional["AnalysisReportDB"]] = relationship(
+        "AnalysisReportDB", back_populates="job", uselist=False, lazy="noload"
+    )
+
+    __table_args__ = (
+        Index("idx_jobs_user_id", "user_id"),
+        Index("idx_jobs_status", "status"),
+        Index("idx_jobs_created_at", "created_at"),
+    )
+
+
+class AnalysisReportDB(Base):
+    """분석 완료 리포트 저장 테이블 (analysis_reports)."""
+
+    __tablename__ = "analysis_reports"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    job_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("analysis_jobs.id", ondelete="CASCADE"), unique=True
+    )
+    user_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), nullable=True)
+
+    # ReportResponse 필드
+    resume_profile: Mapped[Optional[dict]] = mapped_column(JSONB)
+    matched_news: Mapped[Optional[list]] = mapped_column(JSONB)
+    matched_news_count: Mapped[Optional[int]] = mapped_column(Integer)
+    relevance_analysis: Mapped[Optional[str]] = mapped_column(Text)
+    swot: Mapped[Optional[dict]] = mapped_column(JSONB)
+    final_report: Mapped[Optional[str]] = mapped_column(Text)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    job: Mapped["AnalysisJobDB"] = relationship(
+        "AnalysisJobDB", back_populates="report", lazy="noload"
+    )
+
+    __table_args__ = (
+        Index("idx_reports_user_id", "user_id"),
+    )

@@ -5,12 +5,16 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.v1.router import api_router
 from app.core.config import settings
+from app.core.dependencies import get_worker
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings.ensure_directories()
+    worker = get_worker()
+    await worker.start()
     yield
+    await worker.stop()
 
 
 app = FastAPI(
