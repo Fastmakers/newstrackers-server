@@ -6,6 +6,9 @@ __pycache__/
 venv/
 env/
 
+#data
+data/
+
 # Environment
 .env
 .env.local

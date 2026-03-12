@@ -1,8 +1,8 @@
 [project]
 name = "newstracker-server"
 version = "0.1.0"
-description = "News Tracker Agent Service"
-requires-python = ">=3.12"
+description = "AI-Powered Job Interview and Career Development Platform"
+requires-python = ">=3.10"
 dependencies = [
     "fastapi>=0.115.0",
     "uvicorn>=0.32.0",
@@ -11,12 +11,49 @@ dependencies = [
     "langchain>=0.3.0",
     "langgraph>=0.2.0",
     "langchain-openai>=0.2.0",
+    "anthropic>=0.25.0",
+    "streamlit>=1.32.0",
+    "plotly>=5.18.0",
+    "wordcloud>=1.9.0",
+    "pandas>=2.0.0",
+    "numpy>=1.24.0",
+    "openai>=1.0.0",
+    "pypdf>=4.0.0",
+    "python-docx>=1.1.0",
+    "python-multipart>=0.0.9",
+    "pgvector>=0.3.0",
+    "sqlalchemy>=2.0.0",
+    "psycopg2-binary>=2.9.0",
+    "alembic>=1.13.0",
+    "kiwipiepy>=0.18.0",
+    "scikit-learn>=1.3.0",
+    "rank-bm25>=0.2.2",
+    "sentence-transformers>=3.0.0",
+    "PyJWT>=2.8.0",
+    "bcrypt>=4.0.0",
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0.0",
+    "pytest-cov>=4.0.0",
+    "pytest-asyncio>=0.23.0",
     "ruff>=0.6.0",
+    "black>=24.0.0",
+]
+
+test = [
+    "pytest>=8.0.0",
+    "pytest-cov>=4.0.0",
+    "pytest-asyncio>=0.23.0",
+]
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+
+[tool.pytest.ini_options]
+markers = [
+    "live: tests that call external APIs (deselect with '-m \"not live\"')",
 ]
 
 [tool.ruff]
