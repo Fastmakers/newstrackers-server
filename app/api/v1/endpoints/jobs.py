@@ -10,6 +10,7 @@ GET  /reports/{report_id}     — 리포트 상세
 from __future__ import annotations
 
 import asyncio
+import io
 import logging
 import uuid
 from typing import Optional
@@ -33,6 +34,46 @@ from app.schemas.job_models import (
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# 헬퍼
+# ---------------------------------------------------------------------------
+
+def _extract_text_from_pdf(data: bytes) -> str:
+    try:
+        from pypdf import PdfReader
+        reader = PdfReader(io.BytesIO(data))
+        return "\n".join(page.extract_text() or "" for page in reader.pages)
+    except ImportError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="pypdf is not installed.",
+        )
+
+
+def _validate_pdf(file: UploadFile | None, data: bytes) -> None:
+    if not (file and file.filename):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="자소서 PDF 파일이 필요합니다.",
+        )
+    if len(data) > 5 * 1024 * 1024:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"파일 크기 초과 ({len(data) // 1024} KB). 최대 5 MB.",
+        )
+    filename = file.filename or ""
+    if not (filename.endswith(".pdf") or file.content_type == "application/pdf"):
+        raise HTTPException(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail="PDF 파일만 지원합니다.",
+        )
+
+
+def _parse_career_level(career_level: str) -> str:
+    v = career_level.strip()
+    return v if v in ("신입", "경력") else "신입"
 
 
 # ---------------------------------------------------------------------------
@@ -70,9 +111,6 @@ async def create_job(
     user_id: Optional[str] = Depends(get_optional_user_id),
     db: Session = Depends(get_db),
 ) -> JobCreateResponse:
-    from app.api.v1.endpoints.analysis import _parse_career_level, _validate_pdf
-    from app.api.v1.endpoints.resume import _extract_text_from_pdf
-
     data = await file.read() if file else b""
     _validate_pdf(file, data)
 
