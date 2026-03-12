@@ -272,6 +272,7 @@ article.category_l2
    - API 관련 → `docs/03_api_spec.md`
    - 성능 실험 → `docs/04_benchmark_spec.md`
    - 데이터 파이프라인 → `docs/PIPELINE.md`
+   - Job 큐 / 분석 이력 / 진행 상태 영속화 → `docs/05_report_jobs_spec.md`
 
 ---
 

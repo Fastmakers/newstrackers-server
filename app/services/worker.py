@@ -3,12 +3,14 @@
 DB의 pending job을 polling하여 ReportPipeline.stream()으로 처리한다.
 FastAPI lifespan에서 start/stop 한다.
 
-Progress 매핑 (pipeline.stream 이벤트 → DB progress_pct):
+Progress 매핑 (pipeline.stream 이벤트 → progress_pct):
     step=2 done (이력서 분석)  → 25%
-    step=3 done (쿼리 최적화) → 30%   (2,3은 병렬이므로 둘 다 done이면 30%)
+    step=3 done (쿼리 최적화) → 30%
     step=4 done (뉴스 검색)   → 55%
     step=5 done (SWOT/분석)   → 80%
     step=6 done (최종 리포트) → 100%
+
+Retry: 실패 시 최대 _MAX_RETRIES(3)회까지 자동 재시도.
 """
 
 from __future__ import annotations
@@ -33,7 +35,6 @@ _STEP_PROGRESS: dict[tuple[int, str], int] = {
     (6, "done"): 100,
 }
 
-# 동시에 처리할 job 수 제한
 _MAX_CONCURRENT = 3
 
 
@@ -50,7 +51,7 @@ class AnalysisWorker:
 
     async def start(self) -> None:
         self._loop_task = asyncio.create_task(self._poll_loop(), name="analysis-worker")
-        logger.info("AnalysisWorker started (polling interval=3s)")
+        logger.info("AnalysisWorker started (polling interval=3s, max_retries=3)")
 
     async def stop(self) -> None:
         if self._loop_task:
@@ -60,10 +61,6 @@ class AnalysisWorker:
             except asyncio.CancelledError:
                 pass
         logger.info("AnalysisWorker stopped")
-
-    # ------------------------------------------------------------------
-    # 내부 루프
-    # ------------------------------------------------------------------
 
     async def _poll_loop(self) -> None:
         while True:
@@ -88,7 +85,6 @@ class AnalysisWorker:
                     continue
                 if len(self._active_jobs) >= _MAX_CONCURRENT:
                     break
-                # pending → running 선점 (중복 실행 방지)
                 repo.mark_running(job.id)
                 db.commit()
                 self._active_jobs.add(job.id)
@@ -138,10 +134,9 @@ class AnalysisWorker:
                 if event_type == "progress":
                     step = event.get("step", 0)
                     status = event.get("status", "")
-                    label = event.get("label", "")
-                    detail = event.get("detail", "")
                     pct = _STEP_PROGRESS.get((step, status))
-                    self._update_progress(job_id, step, label, detail, pct)
+                    if pct is not None:
+                        self._update_progress(job_id, pct)
 
                 elif event_type == "result":
                     result_data = event.get("data")
@@ -167,7 +162,7 @@ class AnalysisWorker:
             db = SessionLocal()
             try:
                 repo = JobRepository(db)
-                repo.mark_failed(job_id, str(exc))
+                repo.mark_failed_or_retry(job_id, str(exc))
                 db.commit()
             finally:
                 db.close()
@@ -175,18 +170,11 @@ class AnalysisWorker:
         finally:
             self._active_jobs.discard(job_id)
 
-    def _update_progress(
-        self,
-        job_id: uuid.UUID,
-        step: int,
-        label: str,
-        detail: str,
-        pct: Optional[int],
-    ) -> None:
+    def _update_progress(self, job_id: uuid.UUID, pct: int) -> None:
         db = SessionLocal()
         try:
             repo = JobRepository(db)
-            repo.update_progress(job_id, step, label, detail, pct)
+            repo.update_progress(job_id, pct)
             db.commit()
         except Exception as exc:
             logger.warning("Progress update failed for job %s: %s", job_id, exc)

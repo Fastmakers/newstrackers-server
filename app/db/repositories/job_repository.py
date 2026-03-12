@@ -10,6 +10,8 @@ from sqlalchemy.orm import Session
 
 from app.db.models import AnalysisJobDB, AnalysisReportDB
 
+_MAX_RETRIES = 3
+
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
@@ -64,7 +66,7 @@ class JobRepository:
             self._db.query(AnalysisJobDB)
             .filter(AnalysisJobDB.status == "pending")
             .order_by(AnalysisJobDB.created_at.asc())
-            .limit(5)  # 동시 처리 상한
+            .limit(5)
             .all()
         )
 
@@ -78,22 +80,10 @@ class JobRepository:
             job.status = "running"
             job.started_at = _now()
 
-    def update_progress(
-        self,
-        job_id: uuid.UUID,
-        step: int,
-        label: str,
-        detail: str,
-        progress_pct: Optional[int],
-    ) -> None:
+    def update_progress(self, job_id: uuid.UUID, pct: int) -> None:
         job = self._db.get(AnalysisJobDB, job_id)
         if job:
-            job.current_step = step
-            job.step_label = label
-            if detail:
-                job.step_detail = detail
-            if progress_pct is not None:
-                job.progress_pct = progress_pct
+            job.progress_pct = pct
 
     def mark_completed(self, job_id: uuid.UUID) -> None:
         job = self._db.get(AnalysisJobDB, job_id)
@@ -102,12 +92,19 @@ class JobRepository:
             job.completed_at = _now()
             job.progress_pct = 100
 
-    def mark_failed(self, job_id: uuid.UUID, error_msg: str) -> None:
+    def mark_failed_or_retry(self, job_id: uuid.UUID, error_msg: str) -> None:
+        """실패 처리. retry_count < _MAX_RETRIES 면 pending으로 되돌려 재시도."""
         job = self._db.get(AnalysisJobDB, job_id)
-        if job:
+        if not job:
+            return
+        job.retry_count += 1
+        job.error_msg = error_msg
+        if job.retry_count < _MAX_RETRIES:
+            job.status = "pending"
+            job.started_at = None
+        else:
             job.status = "failed"
             job.completed_at = _now()
-            job.error_msg = error_msg
 
     # ------------------------------------------------------------------
     # Report CRUD
@@ -121,7 +118,6 @@ class JobRepository:
     ) -> AnalysisReportDB:
         report = AnalysisReportDB(
             id=uuid.uuid4(),
-            job_id=job_id,
             user_id=user_id,
             resume_profile=report_data.get("resume_profile"),
             matched_news=report_data.get("matched_news"),
@@ -131,22 +127,23 @@ class JobRepository:
             final_report=report_data.get("final_report"),
         )
         self._db.add(report)
-        return report
+        self._db.flush()  # report.id 확보
 
-    def get_report_by_job(self, job_id: uuid.UUID) -> Optional[AnalysisReportDB]:
-        return (
-            self._db.query(AnalysisReportDB)
-            .filter(AnalysisReportDB.job_id == job_id)
-            .first()
-        )
+        # job에 report_id 연결
+        job = self._db.get(AnalysisJobDB, job_id)
+        if job:
+            job.report_id = report.id
+
+        return report
 
     def get_report(self, report_id: uuid.UUID) -> Optional[AnalysisReportDB]:
         return self._db.get(AnalysisReportDB, report_id)
 
-    def get_reports_by_user(self, user_id: str) -> list[AnalysisReportDB]:
+    def get_reports_by_user(self, user_id: str) -> list[tuple[AnalysisReportDB, AnalysisJobDB]]:
         uid = uuid.UUID(user_id)
         return (
-            self._db.query(AnalysisReportDB)
+            self._db.query(AnalysisReportDB, AnalysisJobDB)
+            .join(AnalysisJobDB, AnalysisJobDB.report_id == AnalysisReportDB.id)
             .filter(AnalysisReportDB.user_id == uid)
             .order_by(AnalysisReportDB.created_at.desc())
             .all()
