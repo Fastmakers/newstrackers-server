@@ -41,6 +41,9 @@ class Settings(BaseSettings):
 
     # Application
     DEBUG: bool = False
+    RUN_WORKER_IN_API: bool = True
+    WORKER_POLL_INTERVAL_SEC: float = 3.0
+    WORKER_MAX_CONCURRENT: int = 3
 
     # Project paths
     PROJECT_ROOT: Path = Path(__file__).parent.parent.parent

@@ -35,23 +35,33 @@ _STEP_PROGRESS: dict[tuple[int, str], int] = {
     (6, "done"): 100,
 }
 
-_MAX_CONCURRENT = 3
-
-
 class AnalysisWorker:
     """DB polling 기반 비동기 분석 워커."""
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        poll_interval_sec: float = 3.0,
+        max_concurrent: int = 3,
+    ) -> None:
         self._pipeline: Optional[ReportPipeline] = None
         self._loop_task: Optional[asyncio.Task] = None
         self._active_jobs: set[uuid.UUID] = set()
+        self._poll_interval_sec = poll_interval_sec
+        self._max_concurrent = max_concurrent
 
     def set_pipeline(self, pipeline: ReportPipeline) -> None:
         self._pipeline = pipeline
 
     async def start(self) -> None:
+        if self._loop_task and not self._loop_task.done():
+            logger.info("AnalysisWorker already running")
+            return
         self._loop_task = asyncio.create_task(self._poll_loop(), name="analysis-worker")
-        logger.info("AnalysisWorker started (polling interval=3s, max_retries=3)")
+        logger.info(
+            "AnalysisWorker started (polling interval=%ss, max_concurrent=%s, max_retries=3)",
+            self._poll_interval_sec,
+            self._max_concurrent,
+        )
 
     async def stop(self) -> None:
         if self._loop_task:
@@ -60,6 +70,7 @@ class AnalysisWorker:
                 await self._loop_task
             except asyncio.CancelledError:
                 pass
+            self._loop_task = None
         logger.info("AnalysisWorker stopped")
 
     async def _poll_loop(self) -> None:
@@ -68,12 +79,12 @@ class AnalysisWorker:
                 await self._pick_and_dispatch()
             except Exception as exc:
                 logger.error("Worker poll error: %s", exc)
-            await asyncio.sleep(3)
+            await asyncio.sleep(self._poll_interval_sec)
 
     async def _pick_and_dispatch(self) -> None:
         if not self._pipeline:
             return
-        if len(self._active_jobs) >= _MAX_CONCURRENT:
+        if len(self._active_jobs) >= self._max_concurrent:
             return
 
         db = SessionLocal()
@@ -83,7 +94,7 @@ class AnalysisWorker:
             for job in pending:
                 if job.id in self._active_jobs:
                     continue
-                if len(self._active_jobs) >= _MAX_CONCURRENT:
+                if len(self._active_jobs) >= self._max_concurrent:
                     break
                 repo.mark_running(job.id)
                 db.commit()

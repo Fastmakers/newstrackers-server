@@ -74,7 +74,10 @@ def get_report_pipeline() -> ReportPipeline:
 
 @lru_cache
 def get_worker() -> AnalysisWorker:
-    worker = AnalysisWorker()
+    worker = AnalysisWorker(
+        poll_interval_sec=settings.WORKER_POLL_INTERVAL_SEC,
+        max_concurrent=settings.WORKER_MAX_CONCURRENT,
+    )
     worker.set_pipeline(get_report_pipeline())
     return worker
 

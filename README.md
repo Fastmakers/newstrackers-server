@@ -56,6 +56,25 @@ uvicorn app.main:app --reload
 open http://localhost:8000/docs
 ```
 
+### Worker 실행 모드
+
+비동기 job worker는 두 가지 방식으로 실행할 수 있습니다.
+
+```bash
+# 1) API 프로세스 안에서 worker까지 함께 실행 (기본값)
+RUN_WORKER_IN_API=true uvicorn app.main:app --reload
+
+# 2) API와 worker 분리 실행
+RUN_WORKER_IN_API=false uvicorn app.main:app --reload
+python -m app.worker_main
+```
+
+추가 제어용 환경 변수:
+
+- `RUN_WORKER_IN_API`: `true`면 FastAPI lifespan에서 worker 자동 시작
+- `WORKER_POLL_INTERVAL_SEC`: pending job polling 주기
+- `WORKER_MAX_CONCURRENT`: worker 동시 처리 job 수
+
 ## API 엔드포인트
 
 ### Health

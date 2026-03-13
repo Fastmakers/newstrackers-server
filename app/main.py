@@ -11,10 +11,13 @@ from app.core.dependencies import get_worker
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings.ensure_directories()
-    worker = get_worker()
-    await worker.start()
+    worker = None
+    if settings.RUN_WORKER_IN_API:
+        worker = get_worker()
+        await worker.start()
     yield
-    await worker.stop()
+    if worker:
+        await worker.stop()
 
 
 app = FastAPI(
