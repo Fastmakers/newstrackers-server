@@ -1,224 +1,282 @@
-# NewStrackers AI
+# NewsTrackers AI Server
 
-자소서(Internal Context)와 뉴스(External Context)를 결합해 산업 분석과 기업 면접 준비를 지원하는 AI 서버입니다.
+이력서 PDF와 뉴스 데이터베이스를 결합해 취업 준비용 분석 리포트를 생성하는 FastAPI 서버입니다. 현재 코드는 "요청 즉시 응답" 방식이 아니라, PDF 업로드로 분석 job을 생성하고 worker가 비동기로 처리한 뒤 리포트를 조회하는 구조입니다.
 
 ## 핵심 기능
 
-- **산업 분석**: 뉴스 기반 트렌드, 키워드, 월별 감정 분석, 출처 통계
-- **기업 분석**: 5대 지표 레이더, SWOT, 최신 뉴스 테마, 리스크 평가
-- **자소서 분석**: PDF/DOCX 업로드 → 스킬·강점·키워드 추출
-- **기업 면접 준비**: 자소서 + 기업 뉴스 기반 맞춤 면접 문항 생성
-- **벡터 검색**: pgvector 코사인 유사도로 의미 기반 기사 검색
+- PDF 이력서 텍스트 추출 및 AI 기반 프로필 분석
+- 뉴스 벡터 검색 + 키워드 검색을 결합한 하이브리드 매칭
+- SWOT, 산업 연관성 분석, 최종 면접 준비 리포트 생성
+- JWT 기반 회원가입 / 로그인
+- DB polling 기반 비동기 job worker
 
 ## 기술 스택
 
 | 분류 | 기술 |
 |------|------|
-| 언어 / 프레임워크 | Python 3.12, FastAPI |
-| LLM | Anthropic Claude (`claude-sonnet-4-6`) |
-| 임베딩 | OpenAI `text-embedding-3-small` (1536차원) |
-| DB | PostgreSQL (AWS RDS) + pgvector |
-| AI 파이프라인 | LangGraph (병렬 노드 실행) |
+| API | FastAPI, Uvicorn |
+| 언어 | Python 3.10+ |
+| DB | PostgreSQL, SQLAlchemy, Alembic, pgvector |
+| LLM | Anthropic Claude |
+| Embedding | OpenAI `text-embedding-3-small` |
+| 검색 | Vector similarity + BM25 + RRF |
 | 테스트 | Pytest |
 
-## 설치
+## 빠른 시작
+
+### 1. 의존성 설치
 
 ```bash
-git clone https://github.com/yourusername/newstrackers-server.git
-cd newstrackers-server
 uv sync
 ```
 
-## 환경 변수
+### 2. PostgreSQL 실행
+
+```bash
+docker compose up -d db
+```
+
+기본 로컬 DB 접속 정보:
+
+```env
+DATABASE_URL=postgresql://postgres:postgres@localhost:5432/newstrackers
+```
+
+### 3. 환경 변수 설정
 
 ```bash
 cp .env.example .env
 ```
 
+필수 변수:
+
 | 변수 | 필수 | 설명 |
 |------|------|------|
-| `ANTHROPIC_API_KEY` | ✅ | Claude API 키 |
-| `OPENAI_API_KEY` | ✅ | 임베딩용 OpenAI 키 |
 | `DATABASE_URL` | ✅ | PostgreSQL 연결 문자열 |
-| `LOG_LEVEL` | - | 로그 레벨 (기본: `INFO`) |
+| `ANTHROPIC_API_KEY` | ✅ | 리포트 생성용 Claude API 키 |
+| `OPENAI_API_KEY` | ✅ | 임베딩 / 검색용 OpenAI API 키 |
+| `SECRET_KEY` | 권장 | JWT 서명 키 |
 
-```
-DATABASE_URL=postgresql://user:password@host:5432/dbname
-```
+자주 쓰는 선택 변수:
 
-## 실행
+| 변수 | 기본값 | 설명 |
+|------|--------|------|
+| `RUN_WORKER_IN_API` | `True` | API 프로세스 안에서 worker 자동 실행 |
+| `WORKER_POLL_INTERVAL_SEC` | `3.0` | pending job polling 주기 |
+| `WORKER_MAX_CONCURRENT` | `3` | 동시 처리 job 수 |
+| `EXPERIMENT_USE_FAKE_PIPELINE` | `False` | 외부 API 없이 fake pipeline 사용 |
+| `LOG_LEVEL` | `INFO` | 로그 레벨 |
+| `LOG_FILE` | `./logs/app.log` | 로그 파일 경로 |
+| `ALLOWED_ORIGINS` | `["http://localhost:3000"]` | CORS 허용 origin |
 
-```bash
-# FastAPI 서버
-uvicorn app.main:app --reload
-
-# Swagger UI
-open http://localhost:8000/docs
-```
-
-### Worker 실행 모드
-
-비동기 job worker는 두 가지 방식으로 실행할 수 있습니다.
+### 4. 마이그레이션 적용
 
 ```bash
-# 1) API 프로세스 안에서 worker까지 함께 실행 (기본값)
-RUN_WORKER_IN_API=true uvicorn app.main:app --reload
-
-# 2) API와 worker 분리 실행
-RUN_WORKER_IN_API=false uvicorn app.main:app --reload
-python -m app.worker_main
+uv run alembic upgrade head
 ```
 
-추가 제어용 환경 변수:
+### 5. 서버 실행
 
-- `RUN_WORKER_IN_API`: `true`면 FastAPI lifespan에서 worker 자동 시작
-- `WORKER_POLL_INTERVAL_SEC`: pending job polling 주기
-- `WORKER_MAX_CONCURRENT`: worker 동시 처리 job 수
+기본 모드: API와 worker를 한 프로세스에서 함께 실행합니다.
 
-## API 엔드포인트
+```bash
+uv run uvicorn app.main:app --reload
+```
+
+분리 모드가 필요하면:
+
+```bash
+RUN_WORKER_IN_API=false uv run uvicorn app.main:app --reload
+uv run python -m app.worker_main
+```
+
+문서:
+
+- Swagger UI: `http://localhost:8000/docs`
+- Health check: `http://localhost:8000/health`
+
+## API 개요
+
+기본 prefix는 `/api/v1` 입니다.
 
 ### Health
 
 | Method | Path | 설명 |
 |--------|------|------|
 | GET | `/health` | 루트 헬스체크 |
-| GET | `/api/v1/health` | API v1 헬스체크 |
+| GET | `/api/v1/health` | API 헬스체크 |
 
-### 산업 분석
+### Auth
 
 | Method | Path | 설명 |
 |--------|------|------|
-| POST | `/api/v1/analysis/industry` | 산업 트렌드 분석 |
-| GET | `/api/v1/analysis/graph/industry` | 분석 파이프라인 Mermaid 다이어그램 |
+| POST | `/api/v1/auth/register` | 회원가입 후 access token 반환 |
+| POST | `/api/v1/auth/login` | 로그인 후 access token 반환 |
+| GET | `/api/v1/auth/me` | 현재 사용자 조회 |
+
+`/auth/me` 는 Bearer 토큰이 필요합니다.
+
+### Jobs / Reports
+
+| Method | Path | 설명 |
+|--------|------|------|
+| POST | `/api/v1/jobs` | PDF 이력서 업로드 후 분석 job 생성 |
+| GET | `/api/v1/jobs` | 로그인 사용자의 job 목록 조회 |
+| GET | `/api/v1/jobs/{job_id}` | 개별 job 상태 조회 |
+| GET | `/api/v1/jobs/reports` | 로그인 사용자의 리포트 목록 조회 |
+| GET | `/api/v1/jobs/reports/{report_id}` | 리포트 상세 조회 |
+
+`POST /api/v1/jobs` 요청 필드:
+
+- `file`: PDF 파일, 최대 5MB
+- `company`: 지원 회사명
+- `job_title`: 지원 직무
+- `industry`: 산업명
+- `career_level`: `신입` 또는 `경력`
+
+주의:
+
+- `POST /api/v1/jobs` 는 토큰 없이도 호출할 수 있습니다.
+- `GET /api/v1/jobs`, `GET /api/v1/jobs/reports` 는 토큰이 없으면 빈 목록을 반환합니다.
+- worker가 실행 중이지 않으면 job은 `pending` 상태에 머뭅니다.
+
+## 사용 예시
+
+### 1. 회원가입
 
 ```bash
-curl -X POST http://localhost:8000/api/v1/analysis/industry \
+curl -X POST http://localhost:8000/api/v1/auth/register \
   -H "Content-Type: application/json" \
-  -d '{"industry": "반도체", "days_back": 365}'
+  -d '{
+    "email": "demo@example.com",
+    "nickname": "demo",
+    "password": "password1234"
+  }'
 ```
 
-### 기업 분석
-
-| Method | Path | Body | 설명 |
-|--------|------|------|------|
-| POST | `/api/v1/analysis/company` | JSON | 기업 분석 (자소서 텍스트) |
-| POST | `/api/v1/analysis/company/upload` | form-data | 기업 분석 (자소서 파일) |
-| GET | `/api/v1/analysis/graph/company` | - | 분석 파이프라인 Mermaid 다이어그램 |
+### 2. 로그인
 
 ```bash
-# JSON 방식
-curl -X POST http://localhost:8000/api/v1/analysis/company \
+curl -X POST http://localhost:8000/api/v1/auth/login \
   -H "Content-Type: application/json" \
-  -d '{"company": "삼성전자", "industry": "반도체", "resume": "자소서 내용...", "days_back": 365}'
+  -d '{
+    "email": "demo@example.com",
+    "password": "password1234"
+  }'
+```
 
-# 파일 업로드 방식
-curl -X POST http://localhost:8000/api/v1/analysis/company/upload \
+응답의 `access_token` 을 이후 요청에 사용합니다.
+
+### 3. 분석 job 생성
+
+```bash
+curl -X POST http://localhost:8000/api/v1/jobs \
+  -H "Authorization: Bearer <ACCESS_TOKEN>" \
+  -F "file=@resume_kimjinju.pdf" \
   -F "company=삼성전자" \
+  -F "job_title=백엔드 개발자" \
   -F "industry=반도체" \
-  -F "days_back=365" \
-  -F "file=@자소서.pdf"
+  -F "career_level=신입"
 ```
 
-### 자소서
+예상 응답:
 
-| Method | Path | 설명 |
-|--------|------|------|
-| POST | `/api/v1/resume/parse` | PDF/DOCX에서 텍스트 추출 |
-| POST | `/api/v1/resume/analyze` | 텍스트 추출 + LLM 구조화 분석 |
+```json
+{
+  "job_id": "7e4c2c8c-4fe6-4ec2-a665-bc58a4b99a8b",
+  "status": "pending",
+  "message": "분석 요청이 접수되었습니다. GET /jobs/{job_id} 로 진행상황을 확인하세요."
+}
+```
+
+### 4. job 상태 폴링
 
 ```bash
-curl -X POST http://localhost:8000/api/v1/resume/parse \
-  -F "file=@자소서.pdf"
+curl http://localhost:8000/api/v1/jobs/<JOB_ID>
 ```
 
-## LangGraph 파이프라인
+응답에는 다음 정보가 포함됩니다.
 
-### 산업 분석 그래프
+- `status`: `pending` | `running` | `completed` | `failed`
+- `progress_pct`: 진행률
+- `retry_count`: 자동 재시도 횟수
+- `report_id`: 완료 시 리포트 ID
+- `timing`: queue wait / processing / total lead time
 
-```
-fetch_articles
-     │
-     ├── extract_trends
-     ├── extract_keywords
-     ├── compute_monthly_sentiment
-     └── compute_source_stats
-              │
-         assemble_result
-```
+### 5. 리포트 조회
 
-### 기업 분석 그래프 (2단계 병렬)
-
-```
-Step 1 (병렬):  fetch_articles  ||  analyze_resume
-                        └──── sync barrier ────┘
-                                    │
-Step 2 (병렬):  generate_swot  ||  generate_interview_questions
-             ||  score_dimensions  ||  extract_themes
-             ||  assess_risks      ||  extract_company_info
-                        └──────────────────┘
-                              assemble_result
+```bash
+curl -H "Authorization: Bearer <ACCESS_TOKEN>" \
+  http://localhost:8000/api/v1/jobs/reports
 ```
 
-GET `/api/v1/analysis/graph/industry` 또는 `/company` 로 현재 그래프 구조를 Mermaid 형식으로 실시간 확인 가능.
-
-## 프로젝트 구조
-
+```bash
+curl http://localhost:8000/api/v1/jobs/reports/<REPORT_ID>
 ```
-app/
-  agents/
-    graphs/          # LangGraph 파이프라인 (industry_graph, company_graph)
-    nodes/           # 그래프 노드 (fetch_nodes, llm_nodes, analysis_nodes)
-    state.py         # LangGraph 상태 타입 정의
-  analysis/
-    industry_analyzer.py   # 산업 분석기 (그래프 실행)
-    company_analyzer.py    # 기업 분석기 (그래프 실행)
-  api/v1/
-    endpoints/
-      analysis.py    # 산업/기업 분석 엔드포인트
-      resume.py      # 자소서 업로드/분석 엔드포인트
-      health.py      # 헬스체크
-    router.py
-  core/
-    config.py        # 환경 변수 (pydantic-settings)
-    dependencies.py  # FastAPI DI 프로바이더
-    constants.py     # 상수
-  db/
-    base.py          # SQLAlchemy 엔진/세션
-    models.py        # news_article_embeddings 테이블 모델
-  schemas/
-    data_models.py   # Pydantic 응답 모델
-  services/
-    news_service.py  # DB 조회, 벡터 검색
-    llm_service.py   # Claude API 호출
-    data_loader.py   # AI Hub 데이터 로드 + OpenAI 임베딩 생성
-  main.py            # FastAPI 앱 진입점
-tests/
-  unit/              # 단위 테스트
-  integration/       # 통합 테스트
-  api/               # API 엔드포인트 테스트
-```
+
+리포트 상세 응답에는 다음 데이터가 포함됩니다.
+
+- `resume_profile`
+- `matched_news`
+- `matched_news_count`
+- `relevance_analysis`
+- `swot`
+- `final_report`
+
+## Worker 동작 방식
+
+worker는 DB에서 `pending` job을 polling 하며 `ReportPipeline` 을 실행합니다.
+
+진행률은 파이프라인 단계에 맞춰 갱신됩니다.
+
+- 25%: 이력서 분석 완료
+- 30%: 검색 쿼리 최적화 완료
+- 55%: 뉴스 검색 완료
+- 80%: SWOT / 산업 연관성 분석 완료
+- 100%: 최종 리포트 생성 완료
+
+실패 시 최대 3회까지 자동 재시도합니다.
 
 ## 테스트
 
 ```bash
-# 전체
-pytest -v
-
-# 단위만
-pytest tests/unit/ -v
-
-# 커버리지
-pytest --cov=app tests/
+uv run pytest -v
+uv run pytest tests/unit -v
+uv run pytest tests/integration -v
+uv run pytest --cov=app tests/
 ```
 
-## 데이터 로드
+추가 테스트 / 벤치마크 예시는 `TESTING.md` 에 정리되어 있습니다.
 
-AI Hub 뉴스 데이터를 RDS에 적재할 때:
+## 프로젝트 구조
 
-```bash
-# 임베딩 포함 (OpenAI API 필요)
-python -m app.services.data_loader --input data/news.jsonl
-
-# 임베딩 제외 (빠른 적재)
-python -m app.services.data_loader --input data/news.jsonl --no-embed
+```text
+app/
+  api/v1/endpoints/
+    auth.py           # 회원가입 / 로그인 / 내 정보
+    health.py         # 헬스체크
+    jobs.py           # job 생성, 상태 조회, 리포트 조회
+  core/
+    auth.py           # optional JWT 인증
+    config.py         # 환경 변수 설정
+    dependencies.py   # DI 및 worker 싱글톤 구성
+    security.py       # 비밀번호 해시 / JWT 발급
+  db/
+    base.py           # SQLAlchemy engine / session
+    models.py         # 뉴스, job, report 모델
+    user_models.py    # 사용자 모델
+    repositories/
+      job_repository.py
+  services/
+    news_service.py
+    resume_analyzer.py
+    report_generator.py
+    report_pipeline.py
+    worker.py
+  main.py             # FastAPI 진입점
+  worker_main.py      # standalone worker 진입점
+alembic/              # DB migrations
+docker-compose.yml    # 로컬 PostgreSQL
+tests/                # unit / integration tests
+scripts/              # 데이터 적재, 실험, 벤치마크 스크립트
 ```
