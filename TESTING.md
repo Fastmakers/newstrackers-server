@@ -31,3 +31,18 @@ python3 -m pytest --cov=app --cov-report=term-missing tests/
 
 - 인덱스: `SPEC.md` → `docs/` 디렉터리
 - API 명세: `docs/03_api_spec.md`
+- 비동기 worker 실험 가이드: `docs/ASYNC_WORKER_EXPERIMENT.md`
+
+## 부하 실험
+
+비동기 job 시스템 비교 실험:
+
+```bash
+python scripts/benchmark_async_jobs.py \
+  --base-url http://127.0.0.1:8000 \
+  --pdf resume_kimjinju.pdf \
+  --jobs 12 \
+  --submit-concurrency 4 \
+  --label inprocess \
+  --save
+```
