@@ -13,53 +13,64 @@
 """
 
 from functools import lru_cache
+from typing import Any
 
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.core.security import verify_access_token
 from app.db.base import get_db
 from app.db.user_models import UserDB
-from app.services.embedding_service import EmbeddingService
-from app.services.llm_client import LLMClient
-from app.services.llm_service import LLMService
-from app.services.news_service import NewsService
-from app.services.report_generator import ReportGenerator
 from app.services.report_pipeline import ReportPipeline
-from app.services.resume_analyzer import ResumeAnalyzer
 from app.services.worker import AnalysisWorker
 
 security = HTTPBearer()
 
 
 @lru_cache
-def get_embedding_service() -> EmbeddingService:
+def get_embedding_service() -> Any:
+    from app.services.embedding_service import EmbeddingService
     return EmbeddingService()
 
 
 @lru_cache
-def get_llm_client() -> LLMClient:
+def get_llm_client() -> Any:
+    from app.services.llm_client import LLMClient
     return LLMClient()
 
 
 @lru_cache
-def get_resume_analyzer() -> ResumeAnalyzer:
+def get_resume_analyzer() -> Any:
+    if settings.EXPERIMENT_USE_FAKE_PIPELINE:
+        from app.services.fake_pipeline import FakeResumeAnalyzer
+        return FakeResumeAnalyzer()
+    from app.services.resume_analyzer import ResumeAnalyzer
     return ResumeAnalyzer()
 
 
 @lru_cache
-def get_report_generator() -> ReportGenerator:
+def get_report_generator() -> Any:
+    if settings.EXPERIMENT_USE_FAKE_PIPELINE:
+        from app.services.fake_pipeline import FakeReportGenerator
+        return FakeReportGenerator()
+    from app.services.report_generator import ReportGenerator
     return ReportGenerator()
 
 
 @lru_cache
-def get_news_service() -> NewsService:
+def get_news_service() -> Any:
+    if settings.EXPERIMENT_USE_FAKE_PIPELINE:
+        from app.services.fake_pipeline import FakeNewsService
+        return FakeNewsService()
+    from app.services.news_service import NewsService
     return NewsService(embedding_service=get_embedding_service())
 
 
 @lru_cache
-def get_llm_service() -> LLMService:
+def get_llm_service() -> Any:
+    from app.services.llm_service import LLMService
     return LLMService()
 
 

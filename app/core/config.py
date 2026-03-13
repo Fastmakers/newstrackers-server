@@ -44,6 +44,14 @@ class Settings(BaseSettings):
     RUN_WORKER_IN_API: bool = True
     WORKER_POLL_INTERVAL_SEC: float = 3.0
     WORKER_MAX_CONCURRENT: int = 3
+    EXPERIMENT_USE_FAKE_PIPELINE: bool = False
+    FAKE_RESUME_DELAY_SEC: float = 0.8
+    FAKE_QUERY_DELAY_SEC: float = 0.4
+    FAKE_SEARCH_DELAY_SEC: float = 1.2
+    FAKE_SWOT_DELAY_SEC: float = 1.0
+    FAKE_RELEVANCE_DELAY_SEC: float = 1.0
+    FAKE_FINAL_REPORT_DELAY_SEC: float = 1.4
+    FAKE_MATCHED_NEWS_COUNT: int = 8
 
     # Project paths
     PROJECT_ROOT: Path = Path(__file__).parent.parent.parent

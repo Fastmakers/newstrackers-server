@@ -17,11 +17,14 @@ import json
 import logging
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Any
 
 from app.schemas.data_models import MatchedNewsItem, ReportResponse, ResumeProfile, SWOTList
-from app.services.news_service import NewsService
-from app.services.report_generator import ReportGenerator
-from app.services.resume_analyzer import ResumeAnalyzer
+
+if TYPE_CHECKING:
+    from app.services.news_service import NewsService
+    from app.services.report_generator import ReportGenerator
+    from app.services.resume_analyzer import ResumeAnalyzer
 
 logger = logging.getLogger(__name__)
 
@@ -42,9 +45,9 @@ class ReportPipeline:
 
     def __init__(
         self,
-        news_service: NewsService,
-        resume_analyzer: ResumeAnalyzer,
-        report_generator: ReportGenerator,
+        news_service: Any,
+        resume_analyzer: Any,
+        report_generator: Any,
     ):
         self._news = news_service
         self._resume = resume_analyzer

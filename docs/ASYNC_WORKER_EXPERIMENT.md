@@ -7,6 +7,8 @@
 
 비교 대상은 구조뿐이고, queue(DB), pipeline, 입력 PDF, 요청 수는 동일하게 유지한다.
 
+외부 AI/검색 의존성을 최대한 제거하고 싶다면 `EXPERIMENT_USE_FAKE_PIPELINE=true` 모드를 사용한다.
+
 ---
 
 ## 1. 실험 목적
@@ -29,6 +31,23 @@
 - 같은 요청 수와 제출 동시성 사용
 - 가능하면 같은 머신, 같은 시간대에 연속 실행
 
+### 외부 의존성 최소화 모드
+
+아래 설정을 켜면 Anthropic/OpenAI/실검색 대신 고정 지연 fake pipeline이 사용된다.
+
+```bash
+EXPERIMENT_USE_FAKE_PIPELINE=true
+FAKE_RESUME_DELAY_SEC=0.8
+FAKE_QUERY_DELAY_SEC=0.4
+FAKE_SEARCH_DELAY_SEC=1.2
+FAKE_SWOT_DELAY_SEC=1.0
+FAKE_RELEVANCE_DELAY_SEC=1.0
+FAKE_FINAL_REPORT_DELAY_SEC=1.4
+FAKE_MATCHED_NEWS_COUNT=8
+```
+
+이 모드의 목적은 “API와 worker 구조 차이”만 측정하는 것이다.
+
 ### 입력 파일
 
 다음 중 하나처럼 실제 PDF를 사용한다.
@@ -43,7 +62,9 @@ resume_kimjinju_bank.pdf
 ## 3. 실행 모드 A: API + Worker 통합
 
 ```bash
-RUN_WORKER_IN_API=true uvicorn app.main:app --host 0.0.0.0 --port 8000
+RUN_WORKER_IN_API=true \
+EXPERIMENT_USE_FAKE_PIPELINE=true \
+uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
 
 별도 worker 프로세스는 띄우지 않는다.
@@ -68,13 +89,15 @@ python scripts/benchmark_async_jobs.py \
 API:
 
 ```bash
-RUN_WORKER_IN_API=false uvicorn app.main:app --host 0.0.0.0 --port 8000
+RUN_WORKER_IN_API=false \
+EXPERIMENT_USE_FAKE_PIPELINE=true \
+uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
 
 Worker:
 
 ```bash
-python -m app.worker_main
+EXPERIMENT_USE_FAKE_PIPELINE=true python -m app.worker_main
 ```
 
 로드 테스트:
@@ -193,3 +216,9 @@ python scripts/benchmark_async_jobs.py \
 - 현재 worker는 DB polling 기반이라 replica가 여러 개면 claim 경쟁을 따로 검증해야 한다.
 - 외부 LLM/API 변동성이 크면 구조 차이보다 네트워크 변동이 더 크게 보일 수 있다.
 - 가장 공정한 1차 실험은 동일한 시간대에 연속 실행하는 것이다.
+
+fake pipeline 모드에서는:
+
+- AI/검색 품질은 검증하지 않는다.
+- 오직 아키텍처 차이와 worker 스케줄링 차이만 본다.
+- 1차 실험은 fake pipeline, 2차 검증은 실제 pipeline 순서를 권장한다.
