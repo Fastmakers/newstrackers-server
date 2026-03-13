@@ -19,8 +19,10 @@ import asyncio
 import json
 import logging
 import uuid
+from datetime import datetime
 from typing import Optional
 
+from app.core.job_metrics import build_job_timing_metrics
 from app.db.base import SessionLocal
 from app.db.repositories.job_repository import JobRepository
 from app.services.report_pipeline import ReportInput, ReportPipeline
@@ -99,6 +101,19 @@ class AnalysisWorker:
                 repo.mark_running(job.id)
                 db.commit()
                 self._active_jobs.add(job.id)
+                timing = build_job_timing_metrics(
+                    created_at=job.created_at,
+                    started_at=job.started_at,
+                    completed_at=job.completed_at,
+                )
+                logger.info(
+                    "Job %s dispatched status=%s retry_count=%s queue_wait_ms=%s active_jobs=%s",
+                    job.id,
+                    job.status,
+                    job.retry_count,
+                    timing.queue_wait_ms,
+                    len(self._active_jobs),
+                )
                 asyncio.create_task(
                     self._process_job(
                         job_id=job.id,
@@ -108,6 +123,8 @@ class AnalysisWorker:
                         job_title=job.job_title or "",
                         industry=job.industry or "",
                         career_level=job.career_level or "신입",
+                        created_at=job.created_at,
+                        started_at=job.started_at,
                     ),
                     name=f"job-{job.id}",
                 )
@@ -123,6 +140,8 @@ class AnalysisWorker:
         job_title: str,
         industry: str,
         career_level: str,
+        created_at: datetime,
+        started_at: datetime | None,
     ) -> None:
         logger.info("Job %s started", job_id)
         inp = ReportInput(
@@ -163,10 +182,25 @@ class AnalysisWorker:
                     repo.save_report(job_id, user_id, result_data)
                 repo.mark_completed(job_id)
                 db.commit()
+                job = repo.get_job(job_id)
             finally:
                 db.close()
 
+            completed_at = job.completed_at if job else None
+            timing = build_job_timing_metrics(
+                created_at=created_at,
+                started_at=started_at,
+                completed_at=completed_at,
+            )
             logger.info("Job %s completed", job_id)
+            logger.info(
+                "Job %s metrics queue_wait_ms=%s processing_time_ms=%s total_lead_time_ms=%s matched_news_count=%s",
+                job_id,
+                timing.queue_wait_ms,
+                timing.processing_time_ms,
+                timing.total_lead_time_ms,
+                result_data.get("matched_news_count") if result_data else None,
+            )
 
         except Exception as exc:
             logger.error("Job %s failed: %s", job_id, exc)
@@ -175,8 +209,24 @@ class AnalysisWorker:
                 repo = JobRepository(db)
                 repo.mark_failed_or_retry(job_id, str(exc))
                 db.commit()
+                job = repo.get_job(job_id)
             finally:
                 db.close()
+
+            timing = build_job_timing_metrics(
+                created_at=created_at,
+                started_at=started_at,
+                completed_at=job.completed_at if job else None,
+            )
+            logger.info(
+                "Job %s failure_metrics retry_count=%s queue_wait_ms=%s processing_time_ms=%s total_lead_time_ms=%s final_status=%s",
+                job_id,
+                job.retry_count if job else None,
+                timing.queue_wait_ms,
+                timing.processing_time_ms,
+                timing.total_lead_time_ms,
+                job.status if job else None,
+            )
 
         finally:
             self._active_jobs.discard(job_id)

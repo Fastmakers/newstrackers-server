@@ -22,6 +22,13 @@ class JobCreateResponse(BaseModel):
     message: str
 
 
+class JobTimingMetrics(BaseModel):
+    age_ms: int
+    queue_wait_ms: Optional[int] = None
+    processing_time_ms: Optional[int] = None
+    total_lead_time_ms: int
+
+
 class JobStatusResponse(BaseModel):
     job_id: str
     status: JobStatus
@@ -35,6 +42,7 @@ class JobStatusResponse(BaseModel):
     completed_at: Optional[datetime] = None
     error_msg: Optional[str] = None
     report_id: Optional[str] = None
+    timing: JobTimingMetrics
 
 
 class JobListResponse(BaseModel):
@@ -49,6 +57,7 @@ class ReportSummaryResponse(BaseModel):
     industry: Optional[str] = None
     created_at: datetime
     matched_news_count: Optional[int] = None
+    timing: JobTimingMetrics
 
 
 class ReportDetailResponse(BaseModel):
@@ -61,6 +70,7 @@ class ReportDetailResponse(BaseModel):
     swot: Optional[dict[str, Any]] = None
     final_report: Optional[str] = None
     created_at: datetime
+    timing: JobTimingMetrics
 
 
 class ReportListResponse(BaseModel):

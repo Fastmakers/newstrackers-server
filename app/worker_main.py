@@ -23,6 +23,11 @@ async def run_worker_forever() -> None:
     worker = get_worker()
     stop_event = asyncio.Event()
     loop = asyncio.get_running_loop()
+    logger.info(
+        "Standalone worker booted poll_interval_sec=%s max_concurrent=%s",
+        settings.WORKER_POLL_INTERVAL_SEC,
+        settings.WORKER_MAX_CONCURRENT,
+    )
 
     def _request_stop() -> None:
         logger.info("Stop signal received, shutting down worker...")

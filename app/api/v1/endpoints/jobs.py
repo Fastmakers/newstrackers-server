@@ -19,6 +19,7 @@ from fastapi import APIRouter, Depends, Form, HTTPException, UploadFile, status
 from sqlalchemy.orm import Session
 
 from app.core.auth import get_optional_user_id
+from app.core.job_metrics import build_job_timing_metrics
 from app.db.base import get_db
 from app.db.models import AnalysisJobDB, AnalysisReportDB
 from app.db.repositories.job_repository import JobRepository
@@ -94,6 +95,11 @@ def _job_to_response(job: AnalysisJobDB) -> JobStatusResponse:
         completed_at=job.completed_at,
         error_msg=job.error_msg,
         report_id=str(job.report_id) if job.report_id else None,
+        timing=build_job_timing_metrics(
+            created_at=job.created_at,
+            started_at=job.started_at,
+            completed_at=job.completed_at,
+        ),
     )
 
 
@@ -203,6 +209,11 @@ def list_reports(
             industry=job.industry,
             created_at=report.created_at,
             matched_news_count=report.matched_news_count,
+            timing=build_job_timing_metrics(
+                created_at=job.created_at,
+                started_at=job.started_at,
+                completed_at=job.completed_at,
+            ),
         )
         for report, job in rows
     ]
@@ -242,4 +253,9 @@ def get_report(
         swot=report.swot,
         final_report=report.final_report,
         created_at=report.created_at,
+        timing=build_job_timing_metrics(
+            created_at=job.created_at if job else report.created_at,
+            started_at=job.started_at if job else None,
+            completed_at=job.completed_at if job else None,
+        ),
     )

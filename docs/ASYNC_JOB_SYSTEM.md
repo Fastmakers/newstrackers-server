@@ -119,6 +119,28 @@ pending ──▶ running ──▶ completed
 
 > step=2,3은 pipeline 내부에서 병렬 실행되어 거의 동시에 done된다.
 
+### 실험용 timing metrics
+
+이번 구조에서는 DB 스키마를 바꾸지 않고 아래 값을 계산한다.
+
+| 메트릭 | 계산식 | 의미 |
+|---|---|---|
+| `age_ms` | `now - created_at` | 현재까지 job이 살아있는 시간 |
+| `queue_wait_ms` | `started_at - created_at` | queue에서 대기한 시간 |
+| `processing_time_ms` | `(completed_at or now) - started_at` | worker가 실제 처리한 시간 |
+| `total_lead_time_ms` | `(completed_at or now) - created_at` | 요청 접수부터 현재/완료까지 총 시간 |
+
+이 값들은 두 경로에서 동시에 확인할 수 있다.
+
+1. `GET /api/v1/jobs`, `GET /api/v1/jobs/{job_id}`, `GET /api/v1/jobs/reports*`
+2. worker 로그 (`dispatched`, `completed`, `failure_metrics`)
+
+따라서 실험 시 다음 비교가 가능하다.
+
+- API 내장 worker 모드와 분리 worker 모드의 `queue_wait_ms` 차이
+- 동일 부하에서 `processing_time_ms` 안정성 차이
+- 최종 사용자 체감 지표인 `total_lead_time_ms` 차이
+
 ---
 
 ## 5. API 엔드포인트
