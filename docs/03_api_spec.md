@@ -110,10 +110,11 @@ Request / Response 구조는 `/report`와 동일합니다.
 [4] 쿼리 변환 — transform_query() (Claude Haiku)
     → 자소서 + company + job_title → 뉴스 검색 최적화 쿼리
 
-[5] 하이브리드 검색 + Cross-Encoder 리랭킹 (V3)
-    hybrid_search(query, keyword_query, top_k=40) → RRF 후보 40건
-    rerank_chunks(query, candidates, top_k=15)   → Cross-Encoder 재정렬 → Top 15
+[5] 하이브리드 검색 (V2)
+    hybrid_search(query, keyword_query, top_k=15)
+    → 벡터(pgvector cosine) ‖ 키워드(pg_trgm) 병렬 실행 → RRF(k=60) 융합 → Top 15
     → MatchedNewsItem[] (distance: 벡터 코사인 거리, 키워드 전용은 0.0)
+    ※ Cross-Encoder 리랭킹(V3)은 ENABLE_RERANKER=true 시 활성화 (현재 기본 비활성)
 
 [6] 병렬 LLM (Claude Sonnet) — swot ‖ relevance 동시 실행 → final_report
     ├─ generate_swot_list(resume, company, job_title, chunks, industry)
@@ -183,7 +184,110 @@ Request / Response 구조는 `/report`와 동일합니다.
 
 ---
 
-## 2. 기타 엔드포인트
+## 2. 비동기 Job 시스템 엔드포인트
+
+분석 결과를 DB에 영속 저장하고, 탭을 닫아도 분석이 계속되는 Job 큐 방식.
+상세 명세: `docs/05_report_jobs_spec.md`
+
+### POST `/api/v1/jobs` — Job 생성
+
+PDF 업로드 + 파라미터를 받아 즉시 `job_id`를 반환. 실제 분석은 워커가 백그라운드로 처리.
+
+**Request** (multipart/form-data)
+
+| 필드 | 타입 | 필수 | 설명 |
+|------|------|------|------|
+| `file` | File (PDF) | ✅ | 자소서 PDF (최대 5 MB) |
+| `company` | string | 선택 | 목표 기업 |
+| `job_title` | string | 선택 | 희망 직무 |
+| `industry` | string | 선택 | 희망 산업군 |
+| `career_level` | string | 선택 | `"신입"` \| `"경력"` (기본: `"신입"`) |
+
+**Response** `202 Accepted`
+```json
+{
+  "job_id": "550e8400-e29b-41d4-a716-446655440000",
+  "status": "pending",
+  "message": "분석 요청이 접수되었습니다. GET /jobs/{job_id} 로 진행상황을 확인하세요."
+}
+```
+
+---
+
+### GET `/api/v1/jobs` — 내 Job 목록
+
+**Header:** `Authorization: Bearer <token>` (없으면 빈 배열 반환)
+
+```json
+{
+  "jobs": [
+    {
+      "job_id": "...",
+      "status": "completed",
+      "current_step": 6,
+      "step_label": "리포트 생성 완료",
+      "progress_pct": 100,
+      "company": "삼성전자",
+      "job_title": "백엔드 개발자",
+      "industry": "반도체",
+      "created_at": "2026-03-12T10:00:00Z",
+      "completed_at": "2026-03-12T10:01:20Z",
+      "report_id": "..."
+    }
+  ]
+}
+```
+
+---
+
+### GET `/api/v1/jobs/{job_id}` — Job 상태 조회
+
+단건 조회. 프론트에서 1.5~3초 간격으로 폴링 가능.
+`status=completed`이면 `report_id` 포함, `status=failed`이면 `error_msg` 포함.
+
+---
+
+### GET `/api/v1/jobs/{job_id}/stream` — SSE 진행상황 (재접속 가능)
+
+기존 `/report/stream`과 이벤트 형식 동일. `progress_pct` 필드가 추가됨.
+DB를 1.5초마다 폴링. 재접속 시 현재 상태부터 이어서 수신.
+
+```
+data: {"type": "progress", "step": 4, "status": "done", "label": "뉴스 검색 완료", "detail": "15건 매칭", "progress_pct": 55}
+data: {"type": "result", "data": {...ReportResponse...}}
+data: {"type": "error", "message": "..."}
+```
+
+---
+
+### GET `/api/v1/jobs/reports` — 내 리포트 목록
+
+**Header:** `Authorization: Bearer <token>`
+
+```json
+{
+  "reports": [
+    {
+      "report_id": "...",
+      "job_id": "...",
+      "company": "삼성전자",
+      "job_title": "백엔드 개발자",
+      "matched_news_count": 15,
+      "created_at": "2026-03-12T10:01:20Z"
+    }
+  ]
+}
+```
+
+---
+
+### GET `/api/v1/jobs/reports/{report_id}` — 리포트 상세
+
+기존 `/report` 응답과 동일한 `ReportResponse` 필드 + `report_id`, `job_id`, `created_at`.
+
+---
+
+## 3. 기타 엔드포인트
 
 ### Pipeline C — 자소서 단독 분석
 
@@ -231,7 +335,7 @@ Request / Response 구조는 `/report`와 동일합니다.
 
 ---
 
-## 3. 데이터 모델 (Pydantic)
+## 4. 데이터 모델 (Pydantic)
 
 모든 모델은 `app/schemas/data_models.py` 에 정의.
 
@@ -303,7 +407,7 @@ class ResumeAnalysis(BaseModel):
 
 ---
 
-## 4. LLM 서비스 메서드 (`app/services/llm_service.py`)
+## 5. LLM 서비스 메서드 (`app/services/llm_service.py`)
 
 ### 프론트 파이프라인용 메서드
 
@@ -328,7 +432,7 @@ class ResumeAnalysis(BaseModel):
 
 ---
 
-## 5. CORS 설정
+## 6. CORS 설정
 
 ```env
 # .env
@@ -337,7 +441,7 @@ ALLOWED_ORIGINS=["http://localhost:3000","http://localhost:5173"]
 
 ---
 
-## 6. 성능 목표
+## 7. 성능 목표
 
 | 단계 | 목표 |
 |---|---|
