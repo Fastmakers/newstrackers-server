@@ -162,18 +162,6 @@ PDF 파싱 → Job DB 삽입 → `job_id` 즉시 반환 (분석은 워커가 처
 
 프론트에서 1.5~3초 간격으로 폴링 가능. 위 Jobs 배열의 단일 객체와 동일한 구조.
 
----
-
-### GET `/api/v1/jobs/{job_id}/stream` — SSE 진행상황 (재접속 가능)
-
-기존 `/report/stream`과 이벤트 형식 동일. `progress_pct` 필드만 추가됨.
-DB를 1.5초마다 폴링. Job이 이미 `completed`이면 즉시 result 이벤트 발송 후 종료.
-
-```
-data: {"type": "progress", "step": 4, "status": "done", "label": "뉴스 검색 완료", "detail": "15건 매칭", "progress_pct": 55}
-data: {"type": "result", "data": {...ReportResponse...}}
-data: {"type": "error", "message": "..."}
-```
 
 ---
 
