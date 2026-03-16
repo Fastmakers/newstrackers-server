@@ -45,6 +45,8 @@ class AnalysisWorker:
         self._pipeline: Optional[ReportPipeline] = None
         self._loop_task: Optional[asyncio.Task] = None
         self._active_jobs: set[uuid.UUID] = set()
+        # 1. 초기화 단계에 추적용 딕셔너리 추가
+        self._active_tasks: dict[uuid.UUID, asyncio.Task] = {}
 
     def set_pipeline(self, pipeline: ReportPipeline) -> None:
         self._pipeline = pipeline
@@ -98,10 +100,6 @@ class AnalysisWorker:
         finally:
             db.close()
 
-        # 1. 초기화 단계에 추적용 딕셔너리 추가
-        self._active_tasks: dict[uuid.UUID, asyncio.Task] = {}
-
-        # 2. 작업 생성 시 참조 저장 및 완료 콜백 등록
         for job_id, user_id, resume_text, company, job_title, industry, career_level in job_params:
             self._active_jobs.add(job_id)
             
@@ -118,11 +116,11 @@ class AnalysisWorker:
                 name=f"job-{job_id}",
             )
     
-        # 생성된 태스크 저장
-        self._active_tasks[job_id] = task
-        
-        # 작업 완료(성공/실패 무관) 시 딕셔너리에서 안전하게 제거
-        task.add_done_callback(lambda t, j_id=job_id: self._active_tasks.pop(j_id, None))
+            # 생성된 태스크 저장
+            self._active_tasks[job_id] = task
+            
+            # 작업 완료(성공/실패 무관) 시 딕셔너리에서 안전하게 제거
+            task.add_done_callback(lambda t, j_id=job_id: self._active_tasks.pop(j_id, None))
 
     async def _process_job(
         self,
