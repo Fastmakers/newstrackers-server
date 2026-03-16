@@ -73,35 +73,45 @@ class AnalysisWorker:
     async def _pick_and_dispatch(self) -> None:
         if not self._pipeline:
             return
-        if len(self._active_jobs) >= _MAX_CONCURRENT:
+        slots = _MAX_CONCURRENT - len(self._active_jobs)
+        if slots <= 0:
             return
 
         db = SessionLocal()
         try:
             repo = JobRepository(db)
-            pending = repo.get_pending_jobs()
-            for job in pending:
-                if job.id in self._active_jobs:
-                    continue
-                if len(self._active_jobs) >= _MAX_CONCURRENT:
-                    break
-                repo.mark_running(job.id)
-                db.commit()
-                self._active_jobs.add(job.id)
-                asyncio.create_task(
-                    self._process_job(
-                        job_id=job.id,
-                        user_id=job.user_id,
-                        resume_text=job.resume_text or "",
-                        company=job.company or "",
-                        job_title=job.job_title or "",
-                        industry=job.industry or "",
-                        career_level=job.career_level or "신입",
-                    ),
-                    name=f"job-{job.id}",
+            # claim_pending_jobs: SELECT ... FOR UPDATE SKIP LOCKED + UPDATE running
+            # 단일 트랜잭션으로 원자적 픽업 — 다중 워커/인스턴스에서 중복 실행 없음
+            claimed = repo.claim_pending_jobs(slots)
+            # commit 전에 필요한 필드 추출 (commit 후 ORM 객체 expire 방지)
+            job_params = [
+                (
+                    job.id, job.user_id,
+                    job.resume_text or "", job.company or "",
+                    job.job_title or "", job.industry or "",
+                    job.career_level or "신입",
                 )
+                for job in claimed
+                if job.id not in self._active_jobs
+            ]
+            db.commit()
         finally:
             db.close()
+
+        for job_id, user_id, resume_text, company, job_title, industry, career_level in job_params:
+            self._active_jobs.add(job_id)
+            asyncio.create_task(
+                self._process_job(
+                    job_id=job_id,
+                    user_id=user_id,
+                    resume_text=resume_text,
+                    company=company,
+                    job_title=job_title,
+                    industry=industry,
+                    career_level=career_level,
+                ),
+                name=f"job-{job_id}",
+            )
 
     async def _process_job(
         self,

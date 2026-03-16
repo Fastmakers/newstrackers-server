@@ -61,25 +61,31 @@ class JobRepository:
             .all()
         )
 
-    def get_pending_jobs(self) -> list[AnalysisJobDB]:
-        return (
+    def claim_pending_jobs(self, limit: int) -> list[AnalysisJobDB]:
+        """pending job을 원자적으로 claim하여 running으로 전환.
+
+        FOR UPDATE SKIP LOCKED로 동시에 여러 워커/인스턴스가 실행되어도
+        같은 job을 중복 픽업하지 않도록 보장한다.
+        호출 후 db.commit()으로 lock을 해제해야 한다.
+        """
+        jobs = (
             self._db.query(AnalysisJobDB)
             .filter(AnalysisJobDB.status == "pending")
             .order_by(AnalysisJobDB.created_at.asc())
-            .limit(5)
+            .limit(limit)
+            .with_for_update(skip_locked=True)
             .all()
         )
+        now = _now()
+        for job in jobs:
+            job.status = "running"
+            job.started_at = now
+            job.progress_pct = 10  # PDF 파싱은 job 생성 시 완료됨
+        return jobs
 
     # ------------------------------------------------------------------
     # Job 상태 업데이트
     # ------------------------------------------------------------------
-
-    def mark_running(self, job_id: uuid.UUID) -> None:
-        job = self._db.get(AnalysisJobDB, job_id)
-        if job:
-            job.status = "running"
-            job.started_at = _now()
-            job.progress_pct = 10  # PDF 파싱은 job 생성 시 완료됨
 
     def update_progress(self, job_id: uuid.UUID, pct: int) -> None:
         job = self._db.get(AnalysisJobDB, job_id)
