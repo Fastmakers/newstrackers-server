@@ -14,7 +14,7 @@
 | 분석 결과 저장   | ❌ 메모리 — 탭 닫으면 소실 | ✅ DB 영속 저장                    |
 | 진행 상태 복구   | ❌ 불가                    | ✅ 재접속 시 현재 상태부터 수신    |
 | 분석 이력 조회   | ❌ 불가                    | ✅ 사용자별 과거 리포트 목록       |
-| 실시간 진행 표시 | ✅ SSE                     | ✅ SSE (DB poll 기반, 재접속 가능) |
+| 실시간 진행 표시 | ✅ SSE                     | ✅ 폴링 기반 (1.5~3초 간격, 재접속 가능) |
 
 기존 `/report` / `/report/stream`은 **비로그인 단발성 사용**을 위해 그대로 유지한다.
 
@@ -240,6 +240,7 @@ run_job(job):
 - `app/api/v1/endpoints/auth.py` — `/auth/register`, `/auth/login`, `/auth/me`
 
 `.env` 설정:
+
 ```env
 SECRET_KEY=안전한_랜덤_시크릿키
 ALGORITHM=HS256
@@ -258,7 +259,7 @@ ACCESS_TOKEN_EXPIRE_DAYS=30
 
 ## 6. 구현 파일 맵
 
-```
+```text
 app/
 ├── core/
 │   ├── auth.py              # get_optional_user_id
