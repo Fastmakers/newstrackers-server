@@ -30,6 +30,7 @@ class JobStatusResponse(BaseModel):
     company: Optional[str] = None
     job_title: Optional[str] = None
     industry: Optional[str] = None
+    career_level: Optional[str] = None
     created_at: datetime
     started_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None

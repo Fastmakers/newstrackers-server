@@ -79,6 +79,7 @@ class JobRepository:
         if job:
             job.status = "running"
             job.started_at = _now()
+            job.progress_pct = 10  # PDF 파싱은 job 생성 시 완료됨
 
     def update_progress(self, job_id: uuid.UUID, pct: int) -> None:
         job = self._db.get(AnalysisJobDB, job_id)
