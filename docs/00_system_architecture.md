@@ -205,7 +205,6 @@ news_articles DB
 | `POST /jobs`                    | JSON | 선택 | Job 생성 — PDF 파싱 후 즉시 `job_id` 반환 |
 | `GET /jobs`                     | JSON | 선택 | 내 Job 목록 (토큰 없으면 빈 배열)         |
 | `GET /jobs/{job_id}`            | JSON | ❌    | Job 상태 조회 (폴링용)                    |
-| `GET /jobs/{job_id}/stream`     | SSE  | ❌    | 실시간 진행상황 (재접속 가능)             |
 | `GET /jobs/reports`             | JSON | 선택 | 내 완료 리포트 목록                       |
 | `GET /jobs/reports/{report_id}` | JSON | ❌    | 리포트 상세 조회                          |
 

@@ -9,12 +9,12 @@
 
 ## 1. 기존 방식 vs 신규 방식 비교
 
-| 항목 | 기존 (`/report/stream`) | 신규 (`/jobs`) |
-|------|------------------------|----------------|
-| 분석 결과 저장 | ❌ 메모리 — 탭 닫으면 소실 | ✅ DB 영속 저장 |
-| 진행 상태 복구 | ❌ 불가 | ✅ 재접속 시 현재 상태부터 수신 |
-| 분석 이력 조회 | ❌ 불가 | ✅ 사용자별 과거 리포트 목록 |
-| 실시간 진행 표시 | ✅ SSE | ✅ SSE (DB poll 기반, 재접속 가능) |
+| 항목             | 기존 (`/report/stream`)   | 신규 (`/jobs`)                    |
+| ---------------- | ------------------------- | --------------------------------- |
+| 분석 결과 저장   | ❌ 메모리 — 탭 닫으면 소실 | ✅ DB 영속 저장                    |
+| 진행 상태 복구   | ❌ 불가                    | ✅ 재접속 시 현재 상태부터 수신    |
+| 분석 이력 조회   | ❌ 불가                    | ✅ 사용자별 과거 리포트 목록       |
+| 실시간 진행 표시 | ✅ SSE                     | ✅ SSE (DB poll 기반, 재접속 가능) |
 
 기존 `/report` / `/report/stream`은 **비로그인 단발성 사용**을 위해 그대로 유지한다.
 
@@ -53,27 +53,27 @@ CREATE INDEX idx_analysis_jobs_created  ON analysis_jobs(user_id, created_at DES
 
 **status 전이:**
 
-```
+```text
 pending ──► running ──► completed
                    └──► failed
 ```
 
-| 상태 | 의미 |
-|------|------|
-| `pending` | Job 생성됨, 워커 픽업 대기 중 |
-| `running` | 워커가 분석 진행 중 |
+| 상태        | 의미                                        |
+| ----------- | ------------------------------------------- |
+| `pending`   | Job 생성됨, 워커 픽업 대기 중               |
+| `running`   | 워커가 분석 진행 중                         |
 | `completed` | 분석 완료, `analysis_reports`에 결과 저장됨 |
-| `failed` | 분석 실패, `error_msg` 설정됨 |
+| `failed`    | 분석 실패, `error_msg` 설정됨               |
 
 **진행률 매핑:**
 
-| pipeline step | 이벤트 | progress_pct |
-|---|---|---|
-| step=2, done | 이력서 분석 완료 | 25% |
-| step=3, done | 쿼리 최적화 완료 | 30% |
-| step=4, done | 뉴스 검색 완료 | 55% |
-| step=5, done | SWOT/분석 완료 | 80% |
-| step=6, done | 리포트 생성 완료 | 100% |
+| pipeline step | 이벤트           | progress_pct |
+| ------------- | ---------------- | ------------ |
+| step=2, done  | 이력서 분석 완료 | 25%          |
+| step=3, done  | 쿼리 최적화 완료 | 30%          |
+| step=4, done  | 뉴스 검색 완료   | 55%          |
+| step=5, done  | SWOT/분석 완료   | 80%          |
+| step=6, done  | 리포트 생성 완료 | 100%         |
 
 ---
 
@@ -109,13 +109,13 @@ PDF 파싱 → Job DB 삽입 → `job_id` 즉시 반환 (분석은 워커가 처
 
 **Request** (multipart/form-data)
 
-| 필드 | 타입 | 필수 | 설명 |
-|------|------|------|------|
-| `file` | File (PDF) | ✅ | 자소서 PDF (최대 5 MB) |
-| `company` | string | 선택 | 목표 기업 |
-| `job_title` | string | 선택 | 희망 직무 |
-| `industry` | string | 선택 | 희망 산업군 |
-| `career_level` | string | 선택 | `"신입"` \| `"경력"` (기본: `"신입"`) |
+| 필드           | 타입       | 필수 | 설명                                  |
+| -------------- | ---------- | ---- | ------------------------------------- |
+| `file`         | File (PDF) | ✅    | 자소서 PDF (최대 5 MB)                |
+| `company`      | string     | 선택 | 목표 기업                             |
+| `job_title`    | string     | 선택 | 희망 직무                             |
+| `industry`     | string     | 선택 | 희망 산업군                           |
+| `career_level` | string     | 선택 | `"신입"` \| `"경력"` (기본: `"신입"`) |
 
 **Response** `202 Accepted`
 
@@ -123,7 +123,7 @@ PDF 파싱 → Job DB 삽입 → `job_id` 즉시 반환 (분석은 워커가 처
 {
   "job_id": "550e8400-e29b-41d4-a716-446655440000",
   "status": "pending",
-  "message": "분석 요청이 접수되었습니다. GET /jobs/{job_id} 로 진행상황을 확인하세요."
+  "message": "분석 요청이 접수되었습니다. GET /api/v1/jobs/{job_id} 로 진행상황을 확인하세요."
 }
 ```
 
@@ -258,10 +258,10 @@ ALGORITHM=HS256
 ACCESS_TOKEN_EXPIRE_DAYS=30
 ```
 
-| 의존성 | 토큰 없을 때 |
-|--------|-------------|
-| `get_current_user` | HTTP 401 |
-| `get_optional_user_id` | `None` 반환 |
+| 의존성                 | 토큰 없을 때 |
+| ---------------------- | ------------ |
+| `get_current_user`     | HTTP 401     |
+| `get_optional_user_id` | `None` 반환  |
 
 - `POST /jobs`: 비로그인 허용 (`user_id=NULL`로 저장)
 - `GET /jobs`, `GET /jobs/reports`: 토큰 없으면 빈 배열 반환
