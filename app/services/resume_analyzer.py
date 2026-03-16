@@ -73,7 +73,8 @@ class ResumeAnalyzer(LLMClient):
         system_prompt = (
             "당신은 뉴스 검색 쿼리 최적화 전문가입니다. "
             "자소서와 지원 정보를 분석해, 경제/산업 뉴스 기사에서 검색할 쿼리를 생성합니다. "
-            "반드시 JSON 형식으로만 응답하세요."
+            "반드시 유효한 JSON만 응답하세요. "
+            "마크다운 펜스, 설명 텍스트, trailing comma 없이 순수 JSON 객체만 출력하세요."
         )
 
         user_message = f"""다음 내용을 경제/기업 뉴스 검색 쿼리로 변환하세요.

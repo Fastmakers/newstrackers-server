@@ -103,12 +103,13 @@ class LLMClient:
         system_prompt: str,
         user_message: str,
         temperature: Optional[float] = None,
+        max_tokens: Optional[int] = None,
     ) -> Generator[str, None, None]:
         """Claude 응답을 token-by-token 스트리밍."""
         try:
             with self.client.messages.stream(
                 model=self.model,
-                max_tokens=self.max_tokens,
+                max_tokens=max_tokens or self.max_tokens,
                 temperature=temperature if temperature is not None else self.temperature,
                 system=system_prompt,
                 messages=[{"role": "user", "content": user_message}],

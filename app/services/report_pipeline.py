@@ -183,6 +183,12 @@ class ReportPipeline:
                 msg["detail"] = detail
             return f"data: {json.dumps(msg, ensure_ascii=False)}\n\n"
 
+        def _emit_partial(field: str, data) -> str:
+            msg: dict = {"type": "partial", "field": field, "data": data}
+            if field == "matched_news" and isinstance(data, list):
+                msg["count"] = len(data)
+            return f"data: {json.dumps(msg, ensure_ascii=False, default=str)}\n\n"
+
         try:
             # Step 2 ‖ 3: analyze + transform (병렬)
             yield _emit(2, "자소서 AI 분석 중...")
@@ -202,6 +208,7 @@ class ReportPipeline:
             keyword_query: str = inp.company or search_query
             yield _emit(2, "자소서 분석 완료", "done", f"스킬 {len(resolved_skills)}개 추출")
             yield _emit(3, "검색 쿼리 최적화 완료", "done")
+            yield _emit_partial("resume_profile", resume_profile.model_dump(mode="json"))
 
             # Step 4: hybrid search
             yield _emit(4, "관련 뉴스 하이브리드 검색 중...")
@@ -214,6 +221,7 @@ class ReportPipeline:
             )
             matched_news = self._build_matched_news(chunks)
             yield _emit(4, "뉴스 검색 완료", "done", f"{len(matched_news)}건 매칭")
+            yield _emit_partial("matched_news", [n.model_dump(mode="json") for n in matched_news])
 
             # Step 5: SWOT + relevance (병렬)
             yield _emit(5, "SWOT + 산업 연관성 분석 중...")
@@ -230,22 +238,43 @@ class ReportPipeline:
                 )),
             )
             yield _emit(5, "SWOT + 산업 분석 완료", "done")
+            yield _emit_partial("swot", swot_dict)
+            yield _emit_partial("relevance_analysis", relevance_analysis)
 
-            # Step 6: final report
+            # Step 6: final report — 토큰 단위 스트리밍
             yield _emit(6, "최종 면접 리포트 생성 중...")
-            final_report = await loop.run_in_executor(
-                None,
-                functools.partial(
-                    self._report.generate_final_report,
-                    resume=inp.resume_text, company=inp.company,
-                    job_title=resolved_job_title, industry=inp.industry,
-                    swot=swot_dict, relevance_analysis=relevance_analysis,
-                    career_level=inp.career_level,
-                ),
-            )
+            token_queue: asyncio.Queue = asyncio.Queue()
+            tokens: list[str] = []
+
+            def _produce_tokens() -> None:
+                try:
+                    for token in self._report.stream_final_report(
+                        resume=inp.resume_text, company=inp.company,
+                        job_title=resolved_job_title, industry=inp.industry,
+                        swot=swot_dict, relevance_analysis=relevance_analysis,
+                        career_level=inp.career_level,
+                    ):
+                        loop.call_soon_threadsafe(token_queue.put_nowait, token)
+                except Exception as exc:
+                    loop.call_soon_threadsafe(token_queue.put_nowait, exc)
+                finally:
+                    loop.call_soon_threadsafe(token_queue.put_nowait, None)  # sentinel
+
+            fut = loop.run_in_executor(None, _produce_tokens)
+            while True:
+                item = await token_queue.get()
+                if item is None:
+                    break
+                if isinstance(item, Exception):
+                    raise item
+                tokens.append(item)
+                yield f"data: {json.dumps({'type': 'token', 'field': 'final_report', 'token': item}, ensure_ascii=False)}\n\n"
+            await fut
+
+            final_report = "".join(tokens)
             yield _emit(6, "리포트 생성 완료", "done")
 
-            # 최종 결과
+            # 최종 결과 snapshot (하위 호환 — 워커/클라이언트 모두 사용)
             result = self._assemble(resume_profile, matched_news, swot_dict, relevance_analysis, final_report)
             yield (
                 f"data: {json.dumps({'type': 'result', 'data': result.model_dump(mode='json')}, ensure_ascii=False, default=str)}\n\n"
