@@ -121,8 +121,9 @@ class AnalysisJobDB(Base):
 
     __table_args__ = (
         Index("idx_jobs_user_id", "user_id"),
-        Index("idx_jobs_status", "status"),
-        Index("idx_jobs_created_at", "created_at"),
+        # claim_pending_jobs 쿼리: WHERE status='pending' ORDER BY created_at
+        # 복합 인덱스로 필터 + 정렬을 단일 스캔에 처리 (FOR UPDATE SKIP LOCKED 성능)
+        Index("idx_jobs_status_created_at", "status", "created_at"),
     )
 
 

@@ -102,20 +102,19 @@ get_report_pipeline()            → ReportPipeline(
 
 ---
 
-## 향후 개선 검토 사항
+## 구현 완료 — 비동기 Job 시스템 (2026-03-12)
 
-### 백그라운드 분석 (로그인/로그아웃 후에도 분석 지속)
-
-현재 구조: 요청 → SSE 스트림 → 응답 종료 시 분석 중단
-
-권장 방향: **DB Job Table + Worker 패턴**
+**DB Job Table + Worker 패턴** 구현 완료. 상세 명세: `docs/05_report_jobs_spec.md`
 
 ```
-POST /report/async  → job_id 반환
-Worker              → ReportPipeline.run() 실행, DB에 결과 저장
-GET  /report/{id}   → DB에서 결과 조회
+POST /api/v1/jobs         → job_id 즉시 반환 (PDF 파싱만 수행)
+Worker (asyncio, 3초 폴링) → ReportPipeline.stream() 실행, DB에 결과 저장
+GET  /api/v1/jobs/{id}    → DB에서 상태 조회 (폴링)
+GET  /api/v1/jobs/{id}/stream → SSE 재접속 가능
+GET  /api/v1/jobs/reports/{id} → 완료된 리포트 조회
 ```
 
-- 로그아웃해도 Worker 프로세스가 계속 실행됨
-- Redis + ARQ 또는 Celery가 필요 없는 간단한 구현 가능
-- 현재 규모에서는 BackgroundTasks + DB 저장으로 충분
+- 구현 방식: FastAPI `lifespan` 내 `asyncio.create_task` (단일 프로세스, Redis 불필요)
+- 결과 저장: `analysis_jobs` + `analysis_reports` 테이블 (Alembic migration 004)
+- 인증: JWT Bearer token (`app/core/auth.py` — `get_optional_user_id`)
+- 기존 `/report/stream` 엔드포인트 병렬 유지 (비로그인 단발성 사용)

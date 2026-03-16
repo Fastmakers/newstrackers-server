@@ -50,14 +50,25 @@ client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
 client = anthropic.Anthropic(api_key="sk-ant-...")
 ```
 
-### 2-3. Feature Flags
+### 2-3. 인증 (JWT)
+
+| 변수명 | 필수 | 기본값 | 설명 |
+|--------|------|--------|------|
+| `SECRET_KEY` | **필수** | 없음 | JWT 서명 시크릿 (랜덤 32자+ 권장) |
+| `ALGORITHM` | 선택 | `HS256` | JWT 알고리즘 |
+| `ACCESS_TOKEN_EXPIRE_DAYS` | 선택 | `30` | 액세스 토큰 만료 기간 (일) |
+
+> Job 시스템(`/jobs` 엔드포인트) 및 `/auth` 엔드포인트에서 사용.
+> `get_optional_user_id`는 토큰 없으면 `None` 반환 (비로그인 허용).
+
+### 2-4. Feature Flags
 
 | 변수명 | 타입 | 기본값 | 설명 |
 |--------|------|--------|------|
 | `ENABLE_RERANKER` | `bool` | `False` | Cross-Encoder 리랭킹 활성화. `True`면 `BAAI/bge-reranker-v2-m3` 모델을 로드한다 (~1.1GB). 메모리 주의. |
 | `DEBUG` | `bool` | `False` | FastAPI 디버그 모드 |
 
-### 2-4. 전체 환경 변수 목록
+### 2-5. 전체 환경 변수 목록
 
 ```ini
 # .env (프로젝트 루트)
@@ -66,8 +77,11 @@ client = anthropic.Anthropic(api_key="sk-ant-...")
 DATABASE_URL=postgresql://user:pass@host:5432/dbname
 OPENAI_API_KEY=sk-...
 ANTHROPIC_API_KEY=sk-ant-...
+SECRET_KEY=랜덤_시크릿키_32자_이상
 
 # === 선택 ===
+ALGORITHM=HS256
+ACCESS_TOKEN_EXPIRE_DAYS=30
 ENABLE_RERANKER=false
 DEBUG=false
 ```

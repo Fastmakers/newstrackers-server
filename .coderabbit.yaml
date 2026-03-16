@@ -1,0 +1,60 @@
+# CodeRabbit 설정
+# 문서: https://docs.coderabbit.ai/configure/yaml
+# git 루트: newstrackers-server/ — 경로는 이 디렉토리 기준 상대경로
+
+language: "ko-KR"
+
+reviews:
+  auto_review:
+    enabled: true
+    drafts: false
+    base_branches:
+      - main
+      - develop
+
+  profile: "assertive"
+
+  request_changes_workflow: false
+
+  path_filters:
+    - "app/**"
+    - "alembic/versions/**"
+    - "docs/**"
+    - "tests/**"
+    - "!**/.venv/**"
+    - "!**/__pycache__/**"
+    - "!**/*.pyc"
+    - "!**/*.lock"
+    - "!**/*.egg-info/**"
+    - "!**/logs/**"
+    - "!**/data/**"
+
+  path_instructions:
+    - path: "app/services/**"
+      instructions: |
+        - 비동기 처리 시 asyncio/run_in_executor 사용이 적절한지 확인
+        - LLM 호출 비용이 발생하는 메서드는 불필요한 중복 호출 여부 체크
+        - 예외 처리가 파이프라인 전체를 중단시키지 않는지 확인
+
+    - path: "app/db/**"
+      instructions: |
+        - ORM 쿼리에 N+1 문제가 없는지 확인
+        - FOR UPDATE 사용 시 트랜잭션 범위가 최소화되어 있는지 확인
+        - 인덱스가 없는 컬럼에 대한 필터/정렬 여부 체크
+
+    - path: "alembic/versions/**"
+      instructions: |
+        - downgrade() 함수가 upgrade()를 완전히 역전하는지 확인
+        - 데이터 손실 가능성이 있는 컬럼 삭제/타입 변경 여부 경고
+        - down_revision 체인이 올바른지 확인
+
+    - path: "app/api/**"
+      instructions: |
+        - 엔드포인트가 비즈니스 로직 없이 얇게 유지되는지 확인 (로직은 서비스 레이어)
+        - 인증/권한 체크 누락 여부 확인
+        - 응답 스키마와 실제 반환 타입이 일치하는지 확인
+
+  collapse_walkthrough: false
+
+chat:
+  auto_reply: true
