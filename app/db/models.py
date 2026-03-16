@@ -106,6 +106,7 @@ class AnalysisJobDB(Base):
     # 진행 상황
     progress_pct: Mapped[int] = mapped_column(Integer, default=0)
     retry_count: Mapped[int] = mapped_column(Integer, default=0)
+    partial_result: Mapped[dict] = mapped_column(JSONB, default=dict, server_default="{}")
     report_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True), ForeignKey("analysis_reports.id", ondelete="SET NULL"), nullable=True
     )

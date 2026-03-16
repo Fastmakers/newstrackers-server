@@ -92,6 +92,15 @@ class JobRepository:
         if job:
             job.progress_pct = pct
 
+    def update_partial_result(self, job_id: uuid.UUID, partial: dict, pct: int) -> None:
+        """단계 완료 시 partial_result 머지 + progress_pct 업데이트."""
+        job = self._db.get(AnalysisJobDB, job_id)
+        if job:
+            current = dict(job.partial_result or {})
+            current.update(partial)
+            job.partial_result = current
+            job.progress_pct = pct
+
     def mark_completed(self, job_id: uuid.UUID) -> None:
         job = self._db.get(AnalysisJobDB, job_id)
         if job:

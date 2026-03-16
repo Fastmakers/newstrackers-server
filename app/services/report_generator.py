@@ -1,7 +1,7 @@
 """리포트 생성 서비스 — Claude Sonnet 기반 취업 전략 리포트 생성."""
 
 import logging
-from typing import Dict, Generator, List, Tuple
+from typing import Dict, List, Tuple
 
 from app.services.llm_client import LLMClient
 
@@ -263,23 +263,3 @@ class ReportGenerator(LLMClient):
         except Exception as e:
             logger.error("generate_final_report 실패: %s", e)
             return ""
-
-    def stream_final_report(
-        self,
-        resume: str,
-        company: str,
-        job_title: str,
-        industry: str,
-        swot: Dict[str, List[str]],
-        relevance_analysis: str = "",
-        career_level: str = "신입",
-    ) -> Generator[str, None, None]:
-        """최종 리포트를 Claude 토큰 단위로 스트리밍.
-
-        generate_final_report와 동일한 프롬프트 사용.
-        ReportPipeline.stream()에서 token 이벤트 yield에 사용.
-        """
-        system_prompt, user_message = self._build_final_report_prompt(
-            resume, company, job_title, industry, swot, relevance_analysis, career_level
-        )
-        yield from self.stream_text(system_prompt, user_message, temperature=0.6, max_tokens=3500)
