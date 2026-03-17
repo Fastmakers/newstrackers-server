@@ -255,19 +255,57 @@ hybrid_search 결과 (뉴스 청크)
         → CompanyAnalysis 반환
 ```
 
-### 종합 리포트 — Pipeline E (`/analysis/report`, 프론트 전용)
+### 종합 리포트 — Pipeline E (`POST /jobs` → Worker → `ReportPipeline.run_with_progress`)
 
 ```
-hybrid_search 결과 (뉴스 청크)
-    │  ThreadPoolExecutor
-    ├─ generate_swot_list(resume, company, job_title, chunks, industry)
-    │       → Dict[str, List[str]]  ← 지원자 관점 SWOT (Claude Sonnet)
-    ├─ generate_relevance_analysis(resume, chunks, company, industry, job_title)
-    │       → markdown string (Claude Sonnet)
-    └─ generate_final_report(resume, company, job_title, industry, swot, news_titles)
-            → markdown string (Claude Sonnet)
-        → ReportResponse 반환
+자소서 PDF 텍스트
+    │
+    ▼
+Step 1. analyze_resume(resume_text)                        [Claude Haiku]
+    → skills[], experience_keywords[], target_role
+    │
+    ▼
+Step 2. transform_query(company, job_title, industry,      [Claude Haiku]
+                        skills, experience_keywords)
+    → queries: ["기업 전략 쿼리", "도메인 기술 쿼리", "직무 시장 쿼리"]
+    │
+    ▼
+Step 3. multi_hybrid_search(queries × 3 병렬, keyword_query=기업명)
+    │  ThreadPoolExecutor (쿼리당 hybrid_search 병렬 실행)
+    │  각 hybrid_search: 벡터 검색 || 키워드 검색 → RRF
+    │  최종: rrf_fuse_multi(3개 결과) → top-15 청크
+    │
+    ├─────────────────────────────────────┐
+    ▼                                     ▼
+Step 4a. generate_swot_list(             Step 4b. generate_relevance_analysis(
+    resume, company, job_title,              resume, chunks, company,
+    chunks, industry, career_level)          industry, job_title, career_level)
+    → Dict[str, List[str]]  [Sonnet]         → markdown string  [Sonnet]
+    │                                     │
+    └──────────────┬──────────────────────┘
+                   ▼
+Step 5. generate_final_report(resume, company, job_title,  [Claude Sonnet]
+                               industry, swot, relevance_analysis)
+    → markdown string
+    │
+    ▼
+ReportResponse 조립 → DB 저장 (analysis_reports)
 ```
+
+**진행률 콜백 (on_step):**
+
+| step | pct | 포함 데이터 |
+|------|-----|------------|
+| 1 | 20% | resume_profile |
+| 3 | 50% | matched_news |
+| 4 | 80% | swot, relevance_analysis |
+| 5 | 100% | final_report |
+
+**쿼리 생성 전략 (transform_query):**
+- 쿼리 1: 기업 전략/사업 방향 — 기업 레벨 뉴스
+- 쿼리 2: 지원자 도메인 기술이 해당 기업/산업에 적용되는 방식
+- 쿼리 3: 직무 × 기업이 교차하는 시장 변화
+- 모든 쿼리는 기업명 또는 기업 핵심 사업과 연결 (개인 기술스택 제외)
 
 **LLM 모델:** `claude-sonnet-4-6` (분석), `claude-haiku-4-5` (빠른 전처리)
 

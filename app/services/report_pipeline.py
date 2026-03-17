@@ -1,18 +1,18 @@
 """리포트 파이프라인 — PDF 텍스트 → ReportResponse 오케스트레이션.
 
 Pipeline steps:
-    1. analyze_resume + transform_query  (병렬)
-    2. hybrid_search
-    3. generate_swot_list + generate_relevance_analysis  (병렬)
-    4. generate_final_report
-    5. ReportResponse 조립
+    1. analyze_resume                                      (Haiku, 자소서 구조화)
+    2. transform_query(skills, experience_keywords, ...)   (Haiku, 쿼리 3개 생성)
+    3. multi_hybrid_search(queries × 3 병렬 → RRF)        (DB, 뉴스 검색)
+    4. generate_swot_list || generate_relevance_analysis   (Sonnet, 병렬)
+    5. generate_final_report                               (Sonnet)
+    6. ReportResponse 조립
 """
 
 import asyncio
 import functools
 import logging
 from collections.abc import Awaitable, Callable
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Optional
 
@@ -51,12 +51,6 @@ class ReportPipeline:
     # ------------------------------------------------------------------
     # 공유 헬퍼
     # ------------------------------------------------------------------
-
-    def _build_search_input(self, inp: ReportInput) -> str:
-        base = inp.resume_text[:1500]
-        if inp.company or inp.job_title:
-            base = f"지원 기업: {inp.company}\n지원 직무: {inp.job_title}\n\n" + base
-        return base
 
     def _build_matched_news(self, chunks: list) -> list[MatchedNewsItem]:
         result: list[MatchedNewsItem] = []
@@ -98,67 +92,6 @@ class ReportPipeline:
         )
 
     # ------------------------------------------------------------------
-    # 동기 실행 — POST /report
-    # ------------------------------------------------------------------
-
-    def run(self, inp: ReportInput) -> ReportResponse:
-        """파이프라인 동기 실행. 블로킹 I/O이므로 threadpool에서 호출하세요."""
-        search_input = self._build_search_input(inp)
-
-        # Step 1: analyze_resume + transform_query (병렬)
-        with ThreadPoolExecutor(max_workers=2) as ex:
-            f_resume = ex.submit(self._resume.analyze_resume, inp.resume_text)
-            f_query = ex.submit(self._resume.transform_query, search_input)
-            raw_resume = f_resume.result()
-            transformed = f_query.result()
-
-        resolved_job_title = inp.job_title or raw_resume.get("target_role") or ""
-        resume_profile = ResumeProfile(
-            company=inp.company,
-            job_title=resolved_job_title,
-            industry=inp.industry,
-            skills=raw_resume.get("skills") or [],
-            experiences=raw_resume.get("experience_keywords") or [],
-        )
-
-        search_query: str = transformed.get("query") or search_input[:200]
-        keyword_query: str = inp.company or search_query
-
-        # Step 2: hybrid search
-        chunks = self._news.hybrid_search(
-            query=search_query, keyword_query=keyword_query, top_k=15
-        )
-        matched_news = self._build_matched_news(chunks)
-
-        # Step 3: SWOT + relevance (병렬)
-        with ThreadPoolExecutor(max_workers=2) as ex:
-            f_swot = ex.submit(
-                self._report.generate_swot_list,
-                inp.resume_text, inp.company, resolved_job_title,
-                chunks, inp.industry, inp.career_level,
-            )
-            f_relevance = ex.submit(
-                self._report.generate_relevance_analysis,
-                inp.resume_text, chunks, inp.company,
-                inp.industry, resolved_job_title, inp.career_level,
-            )
-            swot_dict = f_swot.result()
-            relevance_analysis = f_relevance.result()
-
-        # Step 4: final report
-        final_report = self._report.generate_final_report(
-            resume=inp.resume_text,
-            company=inp.company,
-            job_title=resolved_job_title,
-            industry=inp.industry,
-            swot=swot_dict,
-            relevance_analysis=relevance_analysis,
-            career_level=inp.career_level,
-        )
-
-        return self._assemble(resume_profile, matched_news, swot_dict, relevance_analysis, final_report)
-
-    # ------------------------------------------------------------------
     # 비동기 실행 (단계별 progress 콜백) — Worker 전용
     # ------------------------------------------------------------------
 
@@ -169,12 +102,10 @@ class ReportPipeline:
     ) -> ReportResponse:
         """비동기 파이프라인 실행. 각 단계 완료 후 on_step(step, pct, partial_data) 콜백 호출."""
         loop = asyncio.get_running_loop()
-        search_input = self._build_search_input(inp)
 
-        # Step 2+3: analyze_resume + transform_query (병렬)
-        raw_resume, transformed = await asyncio.gather(
-            loop.run_in_executor(None, self._resume.analyze_resume, inp.resume_text),
-            loop.run_in_executor(None, self._resume.transform_query, search_input),
+        # Step 1: analyze_resume — 자소서 구조화 (skills, experience_keywords 추출)
+        raw_resume = await loop.run_in_executor(
+            None, self._resume.analyze_resume, inp.resume_text
         )
         resolved_job_title = inp.job_title or raw_resume.get("target_role") or ""
         resume_profile = ResumeProfile(
@@ -184,24 +115,34 @@ class ReportPipeline:
             skills=raw_resume.get("skills") or [],
             experiences=raw_resume.get("experience_keywords") or [],
         )
-        search_query: str = transformed.get("query") or search_input[:200]
-        keyword_query: str = inp.company or search_query
         if on_step:
-            await on_step(2, 25, {"resume_profile": resume_profile.model_dump(mode="json")})
+            await on_step(1, 20, {"resume_profile": resume_profile.model_dump(mode="json")})
 
-        # Step 4: hybrid search
+        # Step 2: transform_query — 구조화된 역량 데이터로 뉴스 검색 쿼리 3개 생성
+        transformed = await loop.run_in_executor(
+            None,
+            functools.partial(
+                self._resume.transform_query,
+                inp.company, resolved_job_title, inp.industry,
+                raw_resume.get("skills") or [],
+                raw_resume.get("experience_keywords") or [],
+            ),
+        )
+        queries: list[str] = transformed.get("queries") or [f"{inp.company} {resolved_job_title} 산업 동향"]
+
+        # Step 3: multi_hybrid_search — 쿼리 3개 병렬 검색 후 RRF 합산
         chunks = await loop.run_in_executor(
             None,
             functools.partial(
-                self._news.hybrid_search,
-                query=search_query, keyword_query=keyword_query, top_k=15,
+                self._news.multi_hybrid_search,
+                queries=queries, keyword_query=inp.company, top_k=15,
             ),
         )
         matched_news = self._build_matched_news(chunks)
         if on_step:
-            await on_step(4, 55, {"matched_news": [n.model_dump(mode="json") for n in matched_news]})
+            await on_step(3, 50, {"matched_news": [n.model_dump(mode="json") for n in matched_news]})
 
-        # Step 5: SWOT + relevance (병렬)
+        # Step 4: SWOT + relevance (병렬)
         swot_dict, relevance_analysis = await asyncio.gather(
             loop.run_in_executor(None, functools.partial(
                 self._report.generate_swot_list,
@@ -215,9 +156,9 @@ class ReportPipeline:
             )),
         )
         if on_step:
-            await on_step(5, 80, {"swot": swot_dict, "relevance_analysis": relevance_analysis})
+            await on_step(4, 80, {"swot": swot_dict, "relevance_analysis": relevance_analysis})
 
-        # Step 6: final report
+        # Step 5: final report
         final_report = await loop.run_in_executor(
             None,
             functools.partial(
@@ -229,6 +170,6 @@ class ReportPipeline:
             ),
         )
         if on_step:
-            await on_step(6, 100, {"final_report": final_report})
+            await on_step(5, 100, {"final_report": final_report})
 
         return self._assemble(resume_profile, matched_news, swot_dict, relevance_analysis, final_report)

@@ -16,7 +16,7 @@ from typing import Optional
 from app.db.adapters.news_adapter import article_row_to_domain, chunk_row_to_domain
 from app.db.repositories.news_repository import NewsRepository
 from app.schemas.data_models import NewsArticle, NewsChunk
-from app.services.search.rrf import rrf_fuse
+from app.services.search.rrf import rrf_fuse, rrf_fuse_multi
 
 logger = logging.getLogger(__name__)
 
@@ -127,6 +127,33 @@ class NewsService:
             vector_chunks = future_vector.result()
 
         fused = rrf_fuse(vector_chunks, keyword_chunks, top_n=100)
+        return self._dedup(fused, top_k)
+
+    def multi_hybrid_search(
+        self,
+        queries: list[str],
+        keyword_query: str = "",
+        category_l2: Optional[str] = None,
+        top_k: int = 15,
+    ) -> list[NewsChunk]:
+        """멀티쿼리 하이브리드 검색 — 각 쿼리 hybrid_search 병렬 실행 후 RRF 합산.
+
+        Args:
+            queries:       transform_query가 생성한 검색 쿼리 리스트
+            keyword_query: pg_trgm 키워드 검색용 (보통 기업명)
+            top_k:         최종 반환 청크 수
+        """
+        if not queries:
+            return []
+
+        with ThreadPoolExecutor(max_workers=len(queries)) as executor:
+            futures = [
+                executor.submit(self.hybrid_search, q, keyword_query, category_l2, top_k * 3)
+                for q in queries
+            ]
+            result_lists = [f.result() for f in futures]
+
+        fused = rrf_fuse_multi(result_lists, top_n=100)
         return self._dedup(fused, top_k)
 
     def rerank_chunks(

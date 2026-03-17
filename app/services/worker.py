@@ -24,7 +24,7 @@ _MAX_CONCURRENT = 3
 
 
 class AnalysisWorker:
-    """DB polling 기반 비동기 분析 워커."""
+    """DB polling 기반 비동기 분석 워커."""
 
     def __init__(self) -> None:
         self._pipeline: Optional[ReportPipeline] = None
