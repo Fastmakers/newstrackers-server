@@ -116,7 +116,7 @@ query
 
 ---
 
-### 4-2. V2 — 하이브리드 검색 (기본값)
+### 4-2. V2 — 하이브리드 검색 (단일 쿼리)
 
 **함수:** `NewsService.hybrid_search(query, keyword_query, category_l2, top_k)`
 
@@ -152,7 +152,39 @@ query ────────────────────────�
 
 ---
 
-### 4-3. V3 — Cross-Encoder 리랭킹
+### 4-3. V2-Multi — 멀티쿼리 하이브리드 검색 (리포트 파이프라인 기본값)
+
+**함수:** `NewsService.multi_hybrid_search(queries, keyword_query, category_l2, top_k)`
+
+```
+queries: ["기업 전략 쿼리", "도메인 기술 쿼리", "직무 시장 쿼리"]
+  │
+  │  ThreadPoolExecutor(max_workers=len(queries))
+  ├─► [Thread 1] hybrid_search(queries[0], keyword_query) → chunks_1
+  ├─► [Thread 2] hybrid_search(queries[1], keyword_query) → chunks_2
+  └─► [Thread 3] hybrid_search(queries[2], keyword_query) → chunks_3
+                          │
+                          ▼
+               rrf_fuse_multi([chunks_1, chunks_2, chunks_3])
+                       top_n=100
+                          │
+                          ▼
+                   _dedup(top_k)
+```
+
+**쿼리 생성:** `ResumeAnalyzer.transform_query(company, job_title, industry, skills, experience_keywords)`
+- analyze_resume 구조화 결과를 입력으로 받아 Claude Haiku가 3개 쿼리 생성
+- 쿼리 방향: ① 기업 전략/사업 ② 지원자 도메인 기술 × 기업 ③ 직무 × 시장 변화
+- 모든 쿼리는 기업명 또는 기업 핵심 사업과 연결 (개인 기술스택 제외)
+
+**특징:**
+- 단일 쿼리 대비 커버리지 3배 확장
+- 각 `hybrid_search`는 독립적이므로 완전 병렬 실행 가능
+- `keyword_query`는 보통 기업명 단독 — 모든 쿼리에 공통 적용
+
+---
+
+### 4-5. V3 — Cross-Encoder 리랭킹
 
 **함수:** `NewsService.rerank_chunks(query, chunks, top_k)`
 
@@ -195,7 +227,14 @@ score(chunk) = Σ_i  1 / (k + rank_i(chunk))
 | `top_n` | 100 | 융합 후 반환할 최대 건수 |
 
 - `rank_i`가 없는 경우 (한 쪽에만 있는 청크): 해당 항목의 점수만 사용.
-- chunk_id 기준으로 두 결과 리스트를 합산.
+- chunk_id 기준으로 결과 리스트를 합산.
+
+### 함수
+
+| 함수 | 입력 | 용도 |
+|------|------|------|
+| `rrf_fuse(vector_results, keyword_results)` | 리스트 2개 | V2 단일 쿼리 내 벡터+키워드 융합 |
+| `rrf_fuse_multi(result_lists)` | 리스트 N개 | V2-Multi 멀티쿼리 결과 융합 |
 
 ---
 
@@ -244,8 +283,9 @@ for chunk in ranked_chunks:
 | `app/db/adapters/news_adapter.py` | DB Row → Domain Model |
 | `app/db/repositories/news_repository.py` | SQL 쿼리 (벡터/pg_trgm/ILIKE) |
 | `app/schemas/data_models.py` | Pydantic 도메인 모델 |
-| `app/services/news_service.py` | V1 `vector_search`, V2 `hybrid_search`, V3 `rerank_chunks` |
-| `app/services/search/rrf.py` | RRF 융합 |
+| `app/services/news_service.py` | V1 `vector_search`, V2 `hybrid_search`, V2-Multi `multi_hybrid_search`, V3 `rerank_chunks` |
+| `app/services/resume_analyzer.py` | `transform_query` — analyze_resume 결과 기반 쿼리 3개 생성 |
+| `app/services/search/rrf.py` | `rrf_fuse` (2-way), `rrf_fuse_multi` (N-way) |
 | `app/services/search/reranker.py` | Cross-Encoder (BAAI/bge-reranker-v2-m3) |
 
 ---
@@ -258,14 +298,19 @@ for chunk in ranked_chunks:
   - [x] `search_chunks_by_vector()` — pgvector cosine distance
   - [x] `search_chunks_by_keyword()` — pg_trgm word_similarity (GIN 인덱스 필요)
   - [x] `search_chunks_by_keyword_ilike()` — ILIKE 베이스라인 (벤치마크용)
-- [x] `rrf.py` — RRF 융합 (k=60)
+- [x] `rrf.py`
+  - [x] `rrf_fuse()` — 2-way RRF 융합 (k=60)
+  - [x] `rrf_fuse_multi()` — N-way RRF 융합 (멀티쿼리용)
 - [x] `reranker.py` — Cross-Encoder (lazy-load)
 - [x] `news_service.py`
   - [x] `vector_search()` — V1
   - [x] `hybrid_search()` — V2 (ThreadPoolExecutor + pg_trgm)
+  - [x] `multi_hybrid_search()` — V2-Multi (쿼리 N개 병렬 → rrf_fuse_multi)
   - [x] `rerank_chunks()` — V3 entry point
   - [x] `_dedup()` — article_id 기준 중복 제거
   - [x] `_title_boost()` — 기업명 제목 보너스
+- [x] `resume_analyzer.py`
+  - [x] `transform_query(company, job_title, industry, skills, experience_keywords)` — Haiku 기반 쿼리 3개 생성
 - [x] **DB GIN 인덱스 생성** — `idx_chunks_trgm` (생성 완료 — 키워드 검색 2배+ 속도 향상 확인)
 - [ ] `search.py` endpoint — `/api/v1/search` (hybrid_search 연동)
 
@@ -277,8 +322,11 @@ for chunk in ranked_chunks:
 - `search_chunks_by_keyword_ilike()`는 **벤치마크 비교 전용**으로만 사용한다.
 - 새 검색 로직 추가 시 이 명세서를 먼저 업데이트한 후 구현한다.
 - V3 사용 코드는 `rerank_chunks()` 호출 전 `chunks[:_V3_RERANK_POOL]`로 개수를 제한한다.
+- 리포트 파이프라인에서는 `multi_hybrid_search()`를 사용한다 (`hybrid_search()` 직접 호출 금지).
+- `transform_query()`는 반드시 `analyze_resume()` 완료 후 그 결과를 받아 호출한다.
 
 ### DON'T
 - `search_chunks_by_keyword_ilike()`를 프로덕션 검색 경로에 사용하지 않는다.
 - `hybrid_search()` 내부에서 DB 세션을 공유하지 않는다 (Thread마다 독립 세션).
 - Cross-Encoder에 100건 이상을 입력하지 않는다 (지연 시간 폭발적 증가).
+- `transform_query()`에 자소서 원문을 직접 넘기지 않는다 — `analyze_resume()` 구조화 결과를 사용한다.
