@@ -73,6 +73,8 @@ class ResumeAnalyzer(LLMClient):
         industry: str,
         skills: List[str],
         experience_keywords: List[str],
+        search_keywords: List[str] = None,
+        resume_excerpt: str = "",
     ) -> Dict[str, List[str]]:
         """analyze_resume 구조화 결과 → 기업·직무 연관 뉴스 검색 쿼리 3개 생성 (Claude Haiku).
 
@@ -82,6 +84,8 @@ class ResumeAnalyzer(LLMClient):
             industry:             산업 분류
             skills:               analyze_resume가 추출한 기술 스킬 목록
             experience_keywords:  analyze_resume가 추출한 경험 키워드 목록
+            search_keywords:      analyze_resume가 추출한 뉴스 검색용 키워드 목록
+            resume_excerpt:       자소서 원문 발췌 (300자 이내) — 쿼리 구체화용
 
         Returns:
             {"queries": ["쿼리1", "쿼리2", "쿼리3"]}
@@ -96,23 +100,26 @@ class ResumeAnalyzer(LLMClient):
 
         skills_str = ", ".join(skills) if skills else "없음"
         experience_str = ", ".join(experience_keywords) if experience_keywords else "없음"
+        search_kw_str = ", ".join(search_keywords) if search_keywords else "없음"
+        excerpt_section = f"\n[자소서 발췌]\n{resume_excerpt[:300]}\n" if resume_excerpt else ""
 
         if company:
-            user_message = f"""다음 지원자 역량 정보를 바탕으로, 면접 준비에 필요한 뉴스 검색 쿼리 3개를 생성하세요.
+            user_message = f"""다음 지원자 정보를 바탕으로, 면접 준비에 필요한 뉴스 검색 쿼리 3개를 생성하세요.
 
 지원 기업: {company}
 지원 직무: {job_title}
 산업: {industry}
 보유 기술: {skills_str}
 경험 키워드: {experience_str}
-
+뉴스 검색 키워드: {search_kw_str}{excerpt_section}
 규칙:
+- 쿼리는 반드시 자소서 발췌와 뉴스 검색 키워드에 실제로 나온 표현을 기반으로 만드세요
+- 추측하거나 일반적인 직무 키워드(AI, 디지털 전환 등)를 임의로 추가하지 마세요
 - 쿼리 3개는 각각 다른 각도에서 기업+직무 연관 뉴스를 커버해야 합니다
-  1. 기업 전략/사업 방향 (예: "{company} AI 사업 전략 2025")
-  2. 지원자 도메인 기술이 이 기업/산업에서 어떻게 쓰이는지 (예: "{company} 온디바이스 AI 적용")
-  3. 해당 직무와 기업이 교차하는 시장 변화 (예: "{company} {job_title} 디지털 전환")
-- 모든 쿼리는 반드시 {company} 또는 {company}의 핵심 사업과 직접 연결되어야 합니다
-- FastAPI, CLAHE 같은 구현 기술스택은 쿼리에 쓰지 말고, 그 기술이 속한 산업 도메인으로 변환하세요
+  1. {company} + 자소서에서 언급된 핵심 업무 도메인 (예: "{company} 외국인 관광객 마케팅 전략")
+  2. {company} + 지원자가 경험한 구체적 활동 영역 (예: "{company} 온오프라인 채널 프로모션")
+  3. {company} + 해당 직무·산업의 최근 이슈 (예: "{company} 면세점 브랜드 경험 강화")
+- 모든 쿼리에 반드시 {company}를 포함하세요
 - 각 쿼리는 뉴스 제목에 나올 법한 표현으로, 10단어 이내로 작성하세요
 
 응답 형식 (JSON):
@@ -121,20 +128,21 @@ class ResumeAnalyzer(LLMClient):
 }}"""
         else:
             industry_hint = f"산업: {industry}\n" if industry else ""
-            user_message = f"""다음 지원자 역량 정보를 바탕으로, 산업 동향 파악에 필요한 뉴스 검색 쿼리 3개를 생성하세요.
-지원 기업은 미정입니다. 지원자의 역량과 희망 직무·산업에 맞는 최신 트렌드 중심으로 쿼리를 만드세요.
+            user_message = f"""다음 지원자 정보를 바탕으로, 산업 동향 파악에 필요한 뉴스 검색 쿼리 3개를 생성하세요.
+지원 기업은 미정입니다. 지원자의 실제 경험과 역량에 맞는 최신 트렌드 중심으로 쿼리를 만드세요.
 
 지원 직무: {job_title or "미정"}
 {industry_hint}보유 기술: {skills_str}
 경험 키워드: {experience_str}
-
+뉴스 검색 키워드: {search_kw_str}{excerpt_section}
 규칙:
+- 쿼리는 반드시 자소서 발췌와 뉴스 검색 키워드에 실제로 나온 표현을 기반으로 만드세요
+- 추측하거나 일반적인 키워드를 임의로 추가하지 마세요
 - 쿼리 3개는 각각 다른 각도에서 직무·산업 관련 뉴스를 커버해야 합니다
-  1. 지원자 도메인의 최신 기술·트렌드 (예: "온디바이스 AI 반도체 시장 동향 2025")
-  2. 해당 직무군의 채용·역량 변화 (예: "소프트웨어 엔지니어 AI 역량 요구 증가")
-  3. 관련 산업의 시장 변화 또는 주요 이슈 (예: "IT 서비스 클라우드 전환 가속")
+  1. 지원자가 경험한 구체적 활동 영역의 최신 트렌드
+  2. 해당 직무군의 역량·채용 변화
+  3. 관련 산업의 시장 변화 또는 주요 이슈
 - 특정 기업명은 쿼리에 넣지 마세요
-- FastAPI, CLAHE 같은 구현 기술스택은 쿼리에 쓰지 말고, 그 기술이 속한 산업 도메인으로 변환하세요
 - 각 쿼리는 뉴스 제목에 나올 법한 표현으로, 10단어 이내로 작성하세요
 
 응답 형식 (JSON):

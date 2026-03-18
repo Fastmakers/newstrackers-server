@@ -127,6 +127,8 @@ class ReportPipeline:
                 resolved_company, resolved_job_title, resolved_industry,
                 raw_resume.get("skills") or [],
                 raw_resume.get("experience_keywords") or [],
+                raw_resume.get("search_keywords") or [],
+                inp.resume_text[:300],
             ),
         )
         fallback_query = f"{resolved_company} {resolved_job_title} 산업 동향".strip() or "최신 산업 동향"
