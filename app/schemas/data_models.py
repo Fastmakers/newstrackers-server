@@ -28,7 +28,7 @@ class MatchedNewsItem(BaseModel):
     job_category: str = ""
     published_at: Optional[datetime] = None
     url: str = ""
-    distance: float = 0.0   # 코사인 거리 0.0~1.0 (낮을수록 유사)
+    distance: float = 0.0           # 코사인 거리 0.0~1.0 (낮을수록 유사)
 
 
 class SWOTList(BaseModel):

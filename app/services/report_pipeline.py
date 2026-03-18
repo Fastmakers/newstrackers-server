@@ -58,14 +58,13 @@ class ReportPipeline:
             article = chunk.article
             if article is None:
                 continue
-            distance = getattr(chunk, "distance", 0.0) or 0.0
             result.append(MatchedNewsItem(
                 id=article.id,
                 title=article.title,
                 job_category=article.category_l2 or "",
                 published_at=article.published_at,
                 url=article.article_url or "",
-                distance=float(distance),
+                distance=float(getattr(chunk, "distance", 0.0) or 0.0),
             ))
         return result
 
