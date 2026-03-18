@@ -107,10 +107,12 @@ class ReportPipeline:
             None, self._resume.analyze_resume, inp.resume_text
         )
         resolved_job_title = inp.job_title or raw_resume.get("target_role") or ""
+        resolved_company   = inp.company  or raw_resume.get("target_company") or ""
+        resolved_industry  = inp.industry or raw_resume.get("target_industry") or ""
         resume_profile = ResumeProfile(
-            company=inp.company,
+            company=resolved_company,
             job_title=resolved_job_title,
-            industry=inp.industry,
+            industry=resolved_industry,
             skills=raw_resume.get("skills") or [],
             experiences=raw_resume.get("experience_keywords") or [],
         )
@@ -122,19 +124,20 @@ class ReportPipeline:
             None,
             functools.partial(
                 self._resume.transform_query,
-                inp.company, resolved_job_title, inp.industry,
+                resolved_company, resolved_job_title, resolved_industry,
                 raw_resume.get("skills") or [],
                 raw_resume.get("experience_keywords") or [],
             ),
         )
-        queries: list[str] = transformed.get("queries") or [f"{inp.company} {resolved_job_title} 산업 동향"]
+        fallback_query = f"{resolved_company} {resolved_job_title} 산업 동향".strip() or "최신 산업 동향"
+        queries: list[str] = transformed.get("queries") or [fallback_query]
 
         # Step 3: multi_hybrid_search — 쿼리 3개 병렬 검색 후 RRF 합산
         chunks = await loop.run_in_executor(
             None,
             functools.partial(
                 self._news.multi_hybrid_search,
-                queries=queries, keyword_query=inp.company, top_k=15,
+                queries=queries, keyword_query=resolved_company, top_k=15,
             ),
         )
         matched_news = self._build_matched_news(chunks)
@@ -145,13 +148,13 @@ class ReportPipeline:
         swot_dict, relevance_analysis = await asyncio.gather(
             loop.run_in_executor(None, functools.partial(
                 self._report.generate_swot_list,
-                inp.resume_text, inp.company, resolved_job_title,
-                chunks, inp.industry, inp.career_level,
+                inp.resume_text, resolved_company, resolved_job_title,
+                chunks, resolved_industry, inp.career_level,
             )),
             loop.run_in_executor(None, functools.partial(
                 self._report.generate_relevance_analysis,
-                inp.resume_text, chunks, inp.company,
-                inp.industry, resolved_job_title, inp.career_level,
+                inp.resume_text, chunks, resolved_company,
+                resolved_industry, resolved_job_title, inp.career_level,
             )),
         )
         if on_step:
@@ -162,8 +165,8 @@ class ReportPipeline:
             None,
             functools.partial(
                 self._report.generate_final_report,
-                resume=inp.resume_text, company=inp.company,
-                job_title=resolved_job_title, industry=inp.industry,
+                resume=inp.resume_text, company=resolved_company,
+                job_title=resolved_job_title, industry=resolved_industry,
                 swot=swot_dict, relevance_analysis=relevance_analysis,
                 career_level=inp.career_level,
             ),

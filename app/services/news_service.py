@@ -70,7 +70,7 @@ class NewsService:
         scored = []
         for rank, chunk in enumerate(chunks, start=1):
             title = chunk.article.title if chunk.article else ""
-            bonus = 0.3 if company in title else 0.0
+            bonus = 0.3 if company and company in title else 0.0
             scored.append((1.0 / (60 + rank) + bonus, chunk))
         scored.sort(key=lambda x: x[0], reverse=True)
         return [c for _, c in scored]

@@ -43,6 +43,8 @@ class ResumeAnalyzer(LLMClient):
             "skills": ["기술 스킬1", "기술 스킬2"],
             "experience_keywords": ["경험 키워드1", "경험 키워드2"],
             "target_role": "희망 직무 (없으면 null)",
+            "target_company": "지원 또는 희망 기업명 (언급 없으면 null)",
+            "target_industry": "희망 산업 분야 (예: IT·전자, 금융, 제조 등 / 언급 없으면 null)",
             "strengths": ["강점1", "강점2"],
             "search_keywords": ["관련 뉴스 검색에 유용한 산업/기술 키워드1", "키워드2"]
             }}"""
@@ -95,7 +97,8 @@ class ResumeAnalyzer(LLMClient):
         skills_str = ", ".join(skills) if skills else "없음"
         experience_str = ", ".join(experience_keywords) if experience_keywords else "없음"
 
-        user_message = f"""다음 지원자 역량 정보를 바탕으로, 면접 준비에 필요한 뉴스 검색 쿼리 3개를 생성하세요.
+        if company:
+            user_message = f"""다음 지원자 역량 정보를 바탕으로, 면접 준비에 필요한 뉴스 검색 쿼리 3개를 생성하세요.
 
 지원 기업: {company}
 지원 직무: {job_title}
@@ -116,6 +119,28 @@ class ResumeAnalyzer(LLMClient):
 {{
   "queries": ["쿼리1", "쿼리2", "쿼리3"]
 }}"""
+        else:
+            industry_hint = f"산업: {industry}\n" if industry else ""
+            user_message = f"""다음 지원자 역량 정보를 바탕으로, 산업 동향 파악에 필요한 뉴스 검색 쿼리 3개를 생성하세요.
+지원 기업은 미정입니다. 지원자의 역량과 희망 직무·산업에 맞는 최신 트렌드 중심으로 쿼리를 만드세요.
+
+지원 직무: {job_title or "미정"}
+{industry_hint}보유 기술: {skills_str}
+경험 키워드: {experience_str}
+
+규칙:
+- 쿼리 3개는 각각 다른 각도에서 직무·산업 관련 뉴스를 커버해야 합니다
+  1. 지원자 도메인의 최신 기술·트렌드 (예: "온디바이스 AI 반도체 시장 동향 2025")
+  2. 해당 직무군의 채용·역량 변화 (예: "소프트웨어 엔지니어 AI 역량 요구 증가")
+  3. 관련 산업의 시장 변화 또는 주요 이슈 (예: "IT 서비스 클라우드 전환 가속")
+- 특정 기업명은 쿼리에 넣지 마세요
+- FastAPI, CLAHE 같은 구현 기술스택은 쿼리에 쓰지 말고, 그 기술이 속한 산업 도메인으로 변환하세요
+- 각 쿼리는 뉴스 제목에 나올 법한 표현으로, 10단어 이내로 작성하세요
+
+응답 형식 (JSON):
+{{
+  "queries": ["쿼리1", "쿼리2", "쿼리3"]
+}}"""
 
         try:
             raw = self._call_model(_HAIKU, system_prompt, user_message, max_tokens=300, temperature=0.4, timeout=10)
@@ -127,7 +152,9 @@ class ResumeAnalyzer(LLMClient):
                 return {"queries": queries}
             except Exception as json_err:
                 logger.warning("transform_query JSON 파싱 실패: %s\nRAW:\n%s", json_err, raw)
-                return {"queries": [f"{company} {job_title} 산업 동향"]}
+                fallback = f"{company} {job_title} 산업 동향".strip() or "최신 산업 동향"
+                return {"queries": [fallback]}
         except Exception as e:
             logger.warning("Query transformation failed, using fallback: %s", e)
-            return {"queries": [f"{company} {job_title} 산업 동향"]}
+            fallback = f"{company} {job_title} 산업 동향".strip() or "최신 산업 동향"
+            return {"queries": [fallback]}
