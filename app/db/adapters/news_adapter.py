@@ -57,7 +57,7 @@ def article_row_to_domain(row: "NewsArticleDB") -> NewsArticle:
 def chunk_row_to_domain(
     row: "NewsChunkDB",
     article: NewsArticle | None = None,
-    distance: float = 0.0,
+    distance: float | None = None,
 ) -> NewsChunk:
     """NewsChunkDB ORM → NewsChunk 도메인 모델."""
     return NewsChunk(

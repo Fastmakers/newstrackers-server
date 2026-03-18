@@ -135,6 +135,7 @@ class ReportPipeline:
         queries: list[str] = transformed.get("queries") or [fallback_query]
 
         # Step 3: multi_hybrid_search — 쿼리 3개 병렬 검색 후 RRF 합산
+        # keyword_query: 회사명 단독 사용 (pg_trgm은 복합어 사용 시 무관 기사 매칭됨)
         chunks = await loop.run_in_executor(
             None,
             functools.partial(

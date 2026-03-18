@@ -27,7 +27,15 @@ def rrf_fuse_multi(
     for results in result_lists:
         for rank, chunk in enumerate(results, start=1):
             scores[chunk.id] = scores.get(chunk.id, 0.0) + 1.0 / (_K + rank)
-            chunk_map.setdefault(chunk.id, chunk)
+            existing = chunk_map.get(chunk.id)
+            # distance가 있는 청크(벡터 검색 결과)를 우선 보존
+            if existing is None:
+                chunk_map[chunk.id] = chunk
+            elif (
+                getattr(existing, "distance", None) is None
+                and getattr(chunk, "distance", None) is not None
+            ):
+                chunk_map[chunk.id] = chunk
     top_ids = sorted(scores, key=scores.__getitem__, reverse=True)[:top_n]
     return [chunk_map[cid] for cid in top_ids]
 

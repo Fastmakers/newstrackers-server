@@ -90,7 +90,7 @@ class NewsChunk(BaseModel):
     chunk_text: str
     chunk_chars: int
     article: Optional[NewsArticle] = None
-    distance: float = 0.0   # 코사인 거리 (벡터 검색 결과에서 전파)
+    distance: Optional[float] = None   # 코사인 거리 (벡터 검색 결과에서 전파, 키워드 전용 결과는 None)
 
 
 class Keyword(BaseModel):
