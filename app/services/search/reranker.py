@@ -38,7 +38,7 @@ class CrossEncoderReranker:
         if self._model is None:
             try:
                 from sentence_transformers import CrossEncoder
-                self._model = CrossEncoder(MODEL_ID)
+                self._model = CrossEncoder(MODEL_ID, max_length=1024)
                 logger.info("CrossEncoder 로드 완료: %s", MODEL_ID)
             except ImportError as exc:
                 raise ImportError(

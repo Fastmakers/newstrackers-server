@@ -131,7 +131,7 @@ class ReportPipeline:
                     raw_resume.get("skills") or [],
                     raw_resume.get("experience_keywords") or [],
                     raw_resume.get("search_keywords") or [],
-                    inp.resume_text[:300],
+                    inp.resume_text[:600],
                 ),
             ),
             loop.run_in_executor(
@@ -140,7 +140,7 @@ class ReportPipeline:
                     self._resume.generate_hyde_docs,
                     resolved_company, resolved_job_title, resolved_industry,
                     raw_resume.get("search_keywords") or [],
-                    inp.resume_text[:300],
+                    inp.resume_text[:600],
                 ),
             ),
         )
@@ -150,15 +150,27 @@ class ReportPipeline:
         all_queries = queries + (hyde_docs or [])
         logger.debug("검색 쿼리 %d개 (transform: %d, HyDE: %d)", len(all_queries), len(queries), len(hyde_docs or []))
 
-        # Step 3: multi_hybrid_search — 쿼리(3+2)개 병렬 검색 후 RRF 합산
+        # Step 3: multi_hybrid_search — 쿼리(3+2)개 병렬 검색 후 RRF 합산 (top_k*2 후보)
         # keyword_query: 회사명 단독 사용 (pg_trgm은 복합어 사용 시 무관 기사 매칭됨)
         chunks = await loop.run_in_executor(
             None,
             functools.partial(
                 self._news.multi_hybrid_search,
-                queries=all_queries, keyword_query=resolved_company, top_k=15,
+                queries=all_queries, keyword_query=resolved_company, top_k=30,
             ),
         )
+
+        # Step 3.5: Cross-Encoder 재랭킹 — RRF 30개 후보 → 자소서 관련도 순 top 15
+        # query: 회사명 + 직무 + 자소서 발췌 → Cross-Encoder가 (query, 기사) 쌍 직접 비교
+        rerank_query = f"{resolved_company} {resolved_job_title}\n{inp.resume_text}"
+        chunks = await loop.run_in_executor(
+            None,
+            functools.partial(
+                self._news.rerank_chunks,
+                rerank_query, chunks, 15,
+            ),
+        )
+
         matched_news = self._build_matched_news(chunks)
         if on_step:
             await on_step(3, 50, {"matched_news": [n.model_dump(mode="json") for n in matched_news]})
