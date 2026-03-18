@@ -17,6 +17,21 @@ from app.schemas.data_models import NewsChunk
 _K = 60  # RRF 표준 상수
 
 
+def rrf_fuse_multi(
+    result_lists: list[list[NewsChunk]],
+    top_n: int = 100,
+) -> list[NewsChunk]:
+    """N개의 순위 리스트를 RRF로 융합해 상위 top_n 청크를 반환."""
+    scores: dict[int, float] = {}
+    chunk_map: dict[int, NewsChunk] = {}
+    for results in result_lists:
+        for rank, chunk in enumerate(results, start=1):
+            scores[chunk.id] = scores.get(chunk.id, 0.0) + 1.0 / (_K + rank)
+            chunk_map.setdefault(chunk.id, chunk)
+    top_ids = sorted(scores, key=scores.__getitem__, reverse=True)[:top_n]
+    return [chunk_map[cid] for cid in top_ids]
+
+
 def rrf_fuse(
     vector_results: list[NewsChunk],
     keyword_results: list[NewsChunk],

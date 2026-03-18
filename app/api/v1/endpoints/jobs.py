@@ -95,6 +95,7 @@ def _job_to_response(job: AnalysisJobDB) -> JobStatusResponse:
         completed_at=job.completed_at,
         error_msg=job.error_msg,
         report_id=str(job.report_id) if job.report_id else None,
+        partial_result=job.partial_result or None,
     )
 
 

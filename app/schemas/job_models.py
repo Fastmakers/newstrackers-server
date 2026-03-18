@@ -36,6 +36,7 @@ class JobStatusResponse(BaseModel):
     completed_at: Optional[datetime] = None
     error_msg: Optional[str] = None
     report_id: Optional[str] = None
+    partial_result: Optional[dict[str, Any]] = None
 
 
 class JobListResponse(BaseModel):

@@ -6,7 +6,7 @@
 import json
 import logging
 import re
-from typing import Any, Generator, Optional
+from typing import Any, Optional
 
 from anthropic import Anthropic
 
@@ -97,23 +97,3 @@ class LLMClient:
         except json.JSONDecodeError:
             fixed = re.sub(r",\s*([}\]])", r"\1", text)
             return json.loads(fixed)
-
-    def stream_text(
-        self,
-        system_prompt: str,
-        user_message: str,
-        temperature: Optional[float] = None,
-    ) -> Generator[str, None, None]:
-        """Claude 응답을 token-by-token 스트리밍."""
-        try:
-            with self.client.messages.stream(
-                model=self.model,
-                max_tokens=self.max_tokens,
-                temperature=temperature if temperature is not None else self.temperature,
-                system=system_prompt,
-                messages=[{"role": "user", "content": user_message}],
-            ) as stream:
-                yield from stream.text_stream
-        except Exception as e:
-            logger.error("Claude streaming error: %s", e)
-            raise

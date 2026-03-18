@@ -1,7 +1,7 @@
 """자소서 분석 서비스 — Claude Haiku 기반 빠른 분석."""
 
 import logging
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 from app.services.llm_client import LLMClient
 
@@ -35,17 +35,17 @@ class ResumeAnalyzer(LLMClient):
 
         user_message = f"""다음 자기소개서/이력서를 분석하여 핵심 정보를 추출하세요.
 
-이력서/자기소개서:
-{resume[:2000]}
+            이력서/자기소개서:
+            {resume}
 
-응답 형식 (JSON):
-{{
-  "skills": ["기술 스킬1", "기술 스킬2"],
-  "experience_keywords": ["경험 키워드1", "경험 키워드2"],
-  "target_role": "희망 직무 (없으면 null)",
-  "strengths": ["강점1", "강점2"],
-  "search_keywords": ["관련 뉴스 검색에 유용한 산업/기술 키워드1", "키워드2"]
-}}"""
+            응답 형식 (JSON):
+            {{
+            "skills": ["기술 스킬1", "기술 스킬2"],
+            "experience_keywords": ["경험 키워드1", "경험 키워드2"],
+            "target_role": "희망 직무 (없으면 null)",
+            "strengths": ["강점1", "강점2"],
+            "search_keywords": ["관련 뉴스 검색에 유용한 산업/기술 키워드1", "키워드2"]
+            }}"""
 
         try:
             raw = self._call_model(_HAIKU, system_prompt, user_message, max_tokens=1024, temperature=0.3, timeout=15)
@@ -64,44 +64,70 @@ class ResumeAnalyzer(LLMClient):
                 "target_role": None, "strengths": [], "search_keywords": [],
             }
 
-    def transform_query(self, text: str) -> Dict[str, Any]:
-        """자소서/검색어 → 핵심 키워드 + 압축 검색 쿼리 (Claude Haiku).
+    def transform_query(
+        self,
+        company: str,
+        job_title: str,
+        industry: str,
+        skills: List[str],
+        experience_keywords: List[str],
+    ) -> Dict[str, List[str]]:
+        """analyze_resume 구조화 결과 → 기업·직무 연관 뉴스 검색 쿼리 3개 생성 (Claude Haiku).
+
+        Args:
+            company:              지원 기업명
+            job_title:            지원 직무
+            industry:             산업 분류
+            skills:               analyze_resume가 추출한 기술 스킬 목록
+            experience_keywords:  analyze_resume가 추출한 경험 키워드 목록
 
         Returns:
-            {"keywords": [...], "query": "압축된 검색 문장"}
+            {"queries": ["쿼리1", "쿼리2", "쿼리3"]}
         """
         system_prompt = (
-            "당신은 뉴스 검색 쿼리 최적화 전문가입니다. "
-            "자소서와 지원 정보를 분석해, 경제/산업 뉴스 기사에서 검색할 쿼리를 생성합니다. "
-            "반드시 JSON 형식으로만 응답하세요."
+            "당신은 취업 면접 전문가입니다. "
+            "지원자의 역량 정보와 지원 정보를 분석해, "
+            "면접관이 물어볼 만한 최신 산업 동향을 다루는 뉴스 기사를 찾기 위한 검색 쿼리를 생성합니다. "
+            "반드시 유효한 JSON만 응답하세요. "
+            "마크다운 펜스, 설명 텍스트, trailing comma 없이 순수 JSON 객체만 출력하세요."
         )
 
-        user_message = f"""다음 내용을 경제/기업 뉴스 검색 쿼리로 변환하세요.
+        skills_str = ", ".join(skills) if skills else "없음"
+        experience_str = ", ".join(experience_keywords) if experience_keywords else "없음"
 
-{text[:1500]}
+        user_message = f"""다음 지원자 역량 정보를 바탕으로, 면접 준비에 필요한 뉴스 검색 쿼리 3개를 생성하세요.
+
+지원 기업: {company}
+지원 직무: {job_title}
+산업: {industry}
+보유 기술: {skills_str}
+경험 키워드: {experience_str}
 
 규칙:
-- keywords는 지원 기업의 뉴스에서 등장할 법한 사업/전략/서비스/제품 키워드 (FastAPI, 마이크로서비스 같은 지원자 개인 기술스택 X)
-- query는 "[기업명] [사업부문] 전략/사업/서비스" 형태로 작성 (뉴스 제목에 나올 법한 표현)
-- query는 15단어 이내로 압축
-
-예시:
-- 잘못된 예: "삼성전자 DX부문 FastAPI 마이크로서비스 병렬처리"
-- 올바른 예: "삼성전자 DX부문 소프트웨어 AI 갤럭시 서비스 전략"
+- 쿼리 3개는 각각 다른 각도에서 기업+직무 연관 뉴스를 커버해야 합니다
+  1. 기업 전략/사업 방향 (예: "{company} AI 사업 전략 2025")
+  2. 지원자 도메인 기술이 이 기업/산업에서 어떻게 쓰이는지 (예: "{company} 온디바이스 AI 적용")
+  3. 해당 직무와 기업이 교차하는 시장 변화 (예: "{company} {job_title} 디지털 전환")
+- 모든 쿼리는 반드시 {company} 또는 {company}의 핵심 사업과 직접 연결되어야 합니다
+- FastAPI, CLAHE 같은 구현 기술스택은 쿼리에 쓰지 말고, 그 기술이 속한 산업 도메인으로 변환하세요
+- 각 쿼리는 뉴스 제목에 나올 법한 표현으로, 10단어 이내로 작성하세요
 
 응답 형식 (JSON):
 {{
-  "keywords": ["기업명", "사업부문", "사업키워드1", "사업키워드2"],
-  "query": "[기업명] [사업부문] 관련 뉴스 키워드 (15단어 이내)"
+  "queries": ["쿼리1", "쿼리2", "쿼리3"]
 }}"""
 
         try:
-            raw = self._call_model(_HAIKU, system_prompt, user_message, max_tokens=300, temperature=0.2, timeout=10)
+            raw = self._call_model(_HAIKU, system_prompt, user_message, max_tokens=300, temperature=0.4, timeout=10)
             try:
-                return self._extract_json(raw)
+                result = self._extract_json(raw)
+                queries = result.get("queries") or []
+                if not queries:
+                    raise ValueError("queries 비어있음")
+                return {"queries": queries}
             except Exception as json_err:
                 logger.warning("transform_query JSON 파싱 실패: %s\nRAW:\n%s", json_err, raw)
-                return {"keywords": [], "query": text}
+                return {"queries": [f"{company} {job_title} 산업 동향"]}
         except Exception as e:
-            logger.warning("Query transformation failed, using original: %s", e)
-            return {"keywords": [], "query": text}
+            logger.warning("Query transformation failed, using fallback: %s", e)
+            return {"queries": [f"{company} {job_title} 산업 동향"]}
