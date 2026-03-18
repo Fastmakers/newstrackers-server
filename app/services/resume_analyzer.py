@@ -166,3 +166,74 @@ class ResumeAnalyzer(LLMClient):
             logger.warning("Query transformation failed, using fallback: %s", e)
             fallback = f"{company} {job_title} 산업 동향".strip() or "최신 산업 동향"
             return {"queries": [fallback]}
+
+    def generate_hyde_docs(
+        self,
+        company: str,
+        job_title: str,
+        industry: str,
+        search_keywords: List[str] = None,
+        resume_excerpt: str = "",
+    ) -> List[str]:
+        """HyDE — 가상 뉴스 기사 2개 생성 후 임베딩용 텍스트로 반환 (Claude Haiku).
+
+        Hypothetical Document Embedding: 실제 쿼리 임베딩 대신 가상의 관련 뉴스 기사를
+        생성하여 임베딩함으로써 벡터 공간에서 실제 기사와 더 가깝게 매칭.
+
+        Args:
+            company:         지원 기업명
+            job_title:       지원 직무
+            industry:        산업 분류
+            search_keywords: analyze_resume가 추출한 뉴스 검색 키워드
+            resume_excerpt:  자소서 원문 발췌 (300자 이내)
+
+        Returns:
+            가상 뉴스 기사 텍스트 2개 리스트 (각 100~150자 내외)
+        """
+        if not company and not job_title:
+            return []
+
+        system_prompt = (
+            "당신은 경제·산업 전문 기자입니다. "
+            "주어진 기업·직무 정보를 바탕으로 실제 뉴스 기사처럼 보이는 가상의 기사를 작성합니다. "
+            "반드시 유효한 JSON만 응답하세요. "
+            "마크다운 펜스, 설명 텍스트, trailing comma 없이 순수 JSON 객체만 출력하세요."
+        )
+
+        kw_str = ", ".join(search_keywords) if search_keywords else ""
+        excerpt_section = f"\n[자소서 발췌]\n{resume_excerpt[:300]}\n" if resume_excerpt else ""
+        company_str = company or "해당 기업"
+        job_str = job_title or "관련 직무"
+
+        user_message = f"""다음 지원 정보를 바탕으로, 실제 경제 뉴스 기사처럼 보이는 가상의 짧은 기사 2개를 작성하세요.
+
+지원 기업: {company_str}
+지원 직무: {job_str}
+산업: {industry or "미정"}
+관련 키워드: {kw_str or "없음"}{excerpt_section}
+
+규칙:
+- 각 기사는 뉴스 제목 + 본문 1~2문장으로 구성 (총 100~150자)
+- "[기업명]이/가 ~했다", "[기업명] ~전략 발표" 등 실제 뉴스 문체로 작성
+- 자소서에 언급된 구체적 활동/경험과 연관된 내용으로 작성
+- 기사 1: {company_str}의 {job_str} 관련 최근 사업 동향
+- 기사 2: {company_str}의 관련 시장 전략 또는 주요 이슈
+- 실존하지 않는 수치나 허위 사실을 단정적으로 쓰지 말고, 일반적인 뉴스 표현 사용
+
+응답 형식 (JSON):
+{{
+  "docs": ["기사1 제목\\n본문", "기사2 제목\\n본문"]
+}}"""
+
+        try:
+            raw = self._call_model(_HAIKU, system_prompt, user_message, max_tokens=500, temperature=0.5, timeout=10)
+            try:
+                result = self._extract_json(raw)
+                docs = result.get("docs") or []
+                return [d for d in docs if isinstance(d, str) and d.strip()]
+            except Exception as json_err:
+                logger.warning("generate_hyde_docs JSON 파싱 실패: %s\nRAW:\n%s", json_err, raw)
+                return []
+        except Exception as e:
+            logger.warning("HyDE 생성 실패 (무시하고 계속): %s", e)
+            return []

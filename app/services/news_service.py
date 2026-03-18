@@ -46,17 +46,52 @@ class NewsService:
     # 공개 검색 API
     # -------------------------------------------------------------------------
 
+    # 토픽 다양성 필터에서 제외할 공통어 (회사명·일반 명사)
+    _TOPIC_SKIP: frozenset[str] = frozenset([
+        "롯데면세점", "롯데", "면세점", "면세", "한국", "국내", "업계", "관련",
+    ])
+
     @staticmethod
-    def _dedup(chunks: list[NewsChunk], top_k: int) -> list[NewsChunk]:
-        """article_id 기준 중복 청크 제거 — 먼저 나온 청크(순위 높은 것)만 유지."""
+    def _title_roots(title: str) -> set[str]:
+        """제목에서 의미 있는 토큰의 앞 3글자(한국어 어근 근사)를 추출."""
+        # 직선·곡선 따옴표, 말줄임표, 괄호류, 구두점 제거
+        _PUNCT = '…\u201c\u201d\u2018\u2019"\'""\'\'.,!?·[]()【】「」『』'
+        roots: set[str] = set()
+        for token in title.split():
+            token = token.strip(_PUNCT)
+            if len(token) >= 3 and token not in NewsService._TOPIC_SKIP:
+                roots.add(token[:3])
+        return roots
+
+    @staticmethod
+    def _dedup(chunks: list[NewsChunk], top_k: int, topic_diversity: bool = False) -> list[NewsChunk]:
+        """article_id 기준 중복 청크 제거.
+
+        topic_diversity=True 시 같은 토픽(제목 어근 3글자 기준) 기사를
+        최대 2개로 제한해 특정 이슈 독점을 방지.
+        """
         seen: set[int] = set()
         result: list[NewsChunk] = []
+        root_counts: dict[str, int] = {}  # 어근 → 선택된 기사 수 (다양성용)
+
         for chunk in chunks:
-            if chunk.article_id not in seen:
-                seen.add(chunk.article_id)
-                result.append(chunk)
-                if len(result) == top_k:
-                    break
+            if chunk.article_id in seen:
+                continue
+
+            if topic_diversity:
+                title = chunk.article.title if chunk.article else ""
+                roots = NewsService._title_roots(title)
+                # 이미 2개 이상의 기사에서 등장한 어근이 있으면 같은 토픽 → 스킵
+                if any(root_counts.get(r, 0) >= 2 for r in roots):
+                    continue
+                for r in roots:
+                    root_counts[r] = root_counts.get(r, 0) + 1
+
+            seen.add(chunk.article_id)
+            result.append(chunk)
+            if len(result) == top_k:
+                break
+
         return result
 
     @staticmethod
@@ -154,7 +189,7 @@ class NewsService:
             result_lists = [f.result() for f in futures]
 
         fused = rrf_fuse_multi(result_lists, top_n=100)
-        return self._dedup(fused, top_k)
+        return self._dedup(fused, top_k, topic_diversity=True)
 
     def rerank_chunks(
         self,

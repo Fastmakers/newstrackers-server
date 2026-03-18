@@ -119,28 +119,44 @@ class ReportPipeline:
         if on_step:
             await on_step(1, 20, {"resume_profile": resume_profile.model_dump(mode="json")})
 
-        # Step 2: transform_query — 구조화된 역량 데이터로 뉴스 검색 쿼리 3개 생성
-        transformed = await loop.run_in_executor(
-            None,
-            functools.partial(
-                self._resume.transform_query,
-                resolved_company, resolved_job_title, resolved_industry,
-                raw_resume.get("skills") or [],
-                raw_resume.get("experience_keywords") or [],
-                raw_resume.get("search_keywords") or [],
-                inp.resume_text[:300],
+        # Step 2: transform_query + HyDE 병렬 실행
+        # transform_query: 구조화된 역량 데이터로 뉴스 검색 쿼리 3개 생성
+        # generate_hyde_docs: 가상 뉴스 기사 2개 생성 (HyDE — 벡터 공간 정합도 향상)
+        transformed, hyde_docs = await asyncio.gather(
+            loop.run_in_executor(
+                None,
+                functools.partial(
+                    self._resume.transform_query,
+                    resolved_company, resolved_job_title, resolved_industry,
+                    raw_resume.get("skills") or [],
+                    raw_resume.get("experience_keywords") or [],
+                    raw_resume.get("search_keywords") or [],
+                    inp.resume_text[:300],
+                ),
+            ),
+            loop.run_in_executor(
+                None,
+                functools.partial(
+                    self._resume.generate_hyde_docs,
+                    resolved_company, resolved_job_title, resolved_industry,
+                    raw_resume.get("search_keywords") or [],
+                    inp.resume_text[:300],
+                ),
             ),
         )
         fallback_query = f"{resolved_company} {resolved_job_title} 산업 동향".strip() or "최신 산업 동향"
         queries: list[str] = transformed.get("queries") or [fallback_query]
+        # HyDE 문서를 쿼리 리스트에 추가 (최대 2개) — 벡터 검색 정합도 향상
+        all_queries = queries + (hyde_docs or [])
+        logger.debug("검색 쿼리 %d개 (transform: %d, HyDE: %d)", len(all_queries), len(queries), len(hyde_docs or []))
 
-        # Step 3: multi_hybrid_search — 쿼리 3개 병렬 검색 후 RRF 합산
+        # Step 3: multi_hybrid_search — 쿼리(3+2)개 병렬 검색 후 RRF 합산
         # keyword_query: 회사명 단독 사용 (pg_trgm은 복합어 사용 시 무관 기사 매칭됨)
         chunks = await loop.run_in_executor(
             None,
             functools.partial(
                 self._news.multi_hybrid_search,
-                queries=queries, keyword_query=resolved_company, top_k=15,
+                queries=all_queries, keyword_query=resolved_company, top_k=15,
             ),
         )
         matched_news = self._build_matched_news(chunks)
