@@ -1,7 +1,7 @@
 # 비동기 분석 Job 시스템 명세서
 
 > 작성일: 2026-03-12
-> 관련 커밋: 003_add_jobs_reports migration
+> 관련 마이그레이션: 004_add_jobs_reports, 005_refactor_jobs_reports, 006, 007
 
 ---
 
@@ -80,10 +80,11 @@ pending ──▶ running ──▶ completed
 
 ### `analysis_reports` — 완료 결과
 
+> FK 방향 주의: `analysis_jobs.report_id` → `analysis_reports.id` (reports 테이블에 job_id 컬럼 없음)
+
 | 컬럼 | 타입 | 설명 |
 |---|---|---|
 | `id` | UUID PK | 리포트 식별자 |
-| `job_id` | UUID FK (unique) | analysis_jobs.id 참조 |
 | `user_id` | UUID nullable | 조회 편의를 위해 복사 |
 | `resume_profile` | JSONB | ResumeProfile (company, job_title, skills[], experiences[]) |
 | `matched_news` | JSONB | MatchedNewsItem[] |
@@ -95,7 +96,7 @@ pending ──▶ running ──▶ completed
 
 > **왜 users FK가 없나?**
 > users 테이블은 별도 팀이 관리한다. FK 제약 없이 UUID만 저장하고,
-> users 테이블이 확정되면 004 마이그레이션으로 FK를 추가한다.
+> users 테이블이 확정되면 추후 migration으로 FK를 추가한다.
 
 ---
 
@@ -104,21 +105,20 @@ pending ──▶ running ──▶ completed
 **파일:** `app/services/worker.py`
 
 - FastAPI `lifespan`에서 `asyncio.create_task`로 백그라운드 루프 실행
-- **3초마다** DB를 폴링해 `status=pending` job을 최대 5개 가져옴
+- **3초마다** DB를 폴링해 `status=pending` job을 최대 3개 가져옴 (`_MAX_CONCURRENT=3`)
 - 각 job을 `asyncio.create_task`로 병렬 처리 (동시 상한: 3개)
 - 중복 실행 방지: `pending → running` 상태 변경을 폴링 단계에서 먼저 수행
 
-**진행률 매핑** (ReportPipeline.stream() 이벤트 → progress_pct):
+**진행률 매핑** (ReportPipeline.run_with_progress() on_step 콜백 → progress_pct):
 
-| pipeline step | 이벤트 | 의미 | progress_pct |
-|---|---|---|---|
-| step=2, done | 이력서 분석 완료 | Haiku 이력서 파싱 | 25% |
-| step=3, done | 쿼리 최적화 완료 | Haiku 검색어 변환 | 30% |
-| step=4, done | 뉴스 검색 완료 | Hybrid Search | 55% |
-| step=5, done | SWOT/분석 완료 | Sonnet 병렬 분석 | 80% |
-| step=6, done | 리포트 생성 완료 | Sonnet 최종 리포트 | 100% |
+| on_step 호출 | pct | partial_result에 추가되는 키 |
+|---|---|---|
+| step=1 | 20% | `resume_profile` |
+| step=3 | 50% | `matched_news` |
+| step=4 | 80% | `swot`, `relevance_analysis` |
+| step=5 | 100% | `final_report` |
 
-> step=2,3은 pipeline 내부에서 병렬 실행되어 거의 동시에 done된다.
+> `partial_result`는 단계마다 머지(누적)되므로 step=5 완료 시점에 전체 결과가 모두 포함된다.
 
 ---
 
@@ -237,126 +237,3 @@ career_level str        "신입" | "경력" (기본: "신입")
 }
 ```
 
----
-
-## 6. 인증 연동 방법
-
-**관련 파일:**
-- `app/core/security.py` — `create_access_token`, `verify_access_token`, `hash_password`
-- `app/core/auth.py` — `get_optional_user_id` (Optional auth 의존성)
-- `app/core/dependencies.py` — `get_current_user` (필수 auth 의존성, 401 반환)
-- `app/api/v1/endpoints/auth.py` — `/auth/register`, `/auth/login`, `/auth/me`
-
-`.env` 설정:
-```env
-SECRET_KEY=안전한_랜덤_시크릿키_여기에_입력
-ALGORITHM=HS256            # 기본값
-ACCESS_TOKEN_EXPIRE_DAYS=30  # 기본값
-```
-
-- 토큰의 **`sub` claim** = user_id (UUID 문자열)
-- `GET /jobs`, `GET /jobs/reports` 는 user_id 없으면 빈 배열 반환
-- `POST /jobs` 는 비로그인도 가능 (user_id=NULL로 저장)
-- 필수 인증 엔드포인트 추가 시: `Depends(get_current_user)` 사용
-
-**인증 의존성 두 종류:**
-
-| 의존성 | 위치 | 토큰 없을 때 |
-|---|---|---|
-| `get_current_user` | `dependencies.py` | HTTP 401 반환 |
-| `get_optional_user_id` | `auth.py` | None 반환 |
-
----
-
-## 7. 파일 구조
-
-```
-app/
-├── core/
-│   ├── auth.py              # JWT → user_id 의존성 (NEW)
-│   ├── config.py            # JWT_SECRET, JWT_ALGORITHM 추가 (MODIFIED)
-│   └── dependencies.py      # get_worker() 추가 (MODIFIED)
-├── db/
-│   ├── models.py            # AnalysisJobDB, AnalysisReportDB 추가 (MODIFIED)
-│   └── repositories/
-│       └── job_repository.py  # Job/Report CRUD (NEW)
-├── schemas/
-│   └── job_models.py        # Job/Report API 스키마 (NEW)
-├── services/
-│   └── worker.py            # AnalysisWorker — DB polling 워커 (NEW)
-└── api/v1/
-    ├── router.py            # /jobs 라우터 추가 (MODIFIED)
-    └── endpoints/
-        └── jobs.py          # 전체 Jobs/Reports 엔드포인트 (NEW)
-alembic/versions/
-└── 003_add_jobs_reports.py  # analysis_jobs, analysis_reports 테이블 (NEW)
-```
-
----
-
-## 8. 마이그레이션 실행
-
-```bash
-cd newstrackers-server
-alembic upgrade head   # 001 → 002 → 003(users) → 004(jobs/reports) 순서로 실행
-```
-
-또는 단계별:
-```bash
-alembic upgrade 003   # users 테이블만
-alembic upgrade 004   # jobs/reports 테이블 추가
-```
-
----
-
-## 9. 기존 `/report/stream` 과의 관계
-
-기존 엔드포인트는 **그대로 유지**된다.
-새 Job 시스템은 병렬 운영되며, 로그인 사용자는 결과 저장이 필요할 때 `/jobs`를 사용하고
-빠른 일회성 분석은 기존 `/report/stream`을 계속 쓸 수 있다.
-
-| | 기존 `/report/stream` | 새 `/jobs` |
-|---|---|---|
-| 결과 저장 | ❌ | ✅ |
-| 재접속 지원 | ❌ | ✅ |
-| 히스토리 조회 | ❌ | ✅ |
-| 응답 지연 | 즉시 스트리밍 | job_id 즉시 반환, 분석은 비동기 |
-| 로그인 필요 | ❌ | ❌ (Optional) |
-
----
-
-## 10. 프론트엔드 연동 (JobHistory 컴포넌트)
-
-**파일:** `newstrackers-frontend/src/components/JobHistory.tsx`
-
-### 탭 구조 (2026-03-12 개편)
-
-| 탭 | 내용 |
-|---|---|
-| 자소서 업로드 | 업로드 폼 → 분석 완료 시 결과 인라인 표시 → "← 새 분석" 으로 폼 복귀 |
-| 분석 기록 | Job 목록 → "결과 보기" 클릭 시 리포트 인라인 표시 → "← 분석 기록" 으로 목록 복귀 |
-
-- "분석 결과" 탭 제거 — 업로드 결과는 업로드 탭 내에서, 기록 결과는 기록 탭 내에서 표시
-- 각 분석이 독립적인 뷰로 동작
-
-### 자동 새로고침
-
-- **주기:** 5초마다 `GET /api/v1/jobs` 자동 폴링
-- **동작:** 초기 로드는 로딩 스피너 표시, 이후 자동 새로고침은 silent (스피너 없음)
-- **중단 조건:** 리포트 상세 뷰로 진입 시 폴링 중단, 목록으로 돌아오면 재시작
-
-### 버그 수정 (2026-03-12)
-
-`GET /api/v1/jobs` 응답에서 completed 상태 job의 `report_id`가 항상 `null`로 반환되던 문제 수정.
-- **원인:** `AnalysisJobDB.report` 관계가 `lazy="noload"` → `_job_to_response`에서 `job.report` 항상 `None`
-- **수정:** `list_jobs` 엔드포인트에서 completed job마다 `repo.get_report_by_job()`으로 명시 조회
-
----
-
-## 11. 알려진 제약 / TODO
-
-- **users FK:** users 테이블 스키마가 확정되면 004 마이그레이션으로 FK 제약 추가
-- **job 만료 정책:** 오래된 job/report 자동 삭제 로직 미구현 (주기적 cleanup 필요)
-- **재시도 로직:** 실패한 job 자동 재시도 미구현
-- **동시 처리 상한:** 현재 `_MAX_CONCURRENT=3` 하드코딩. 설정값으로 이동 가능
-- **DELETE 엔드포인트:** 리포트 삭제 미구현 (CORS에 DELETE 메서드 추가 필요)
