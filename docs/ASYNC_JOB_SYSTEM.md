@@ -25,26 +25,27 @@
    │   (PDF + 파라미터)        │── INSERT analysis_jobs ─▶│ (status=pending)
    │◀── { job_id } ──────────│                          │
    │                          │                          │
-   │── GET /jobs/{id}/stream ▶│                          │
-   │   (SSE 연결)              │                          │
-   │                          │                          │
    │         [Worker가 3초마다 polling]                   │
    │                          │── SELECT pending jobs ──▶│
    │                          │◀── job ─────────────────│
    │                          │── UPDATE status=running ▶│
    │                          │                          │
-   │                          │  (pipeline.stream() 실행) │
-   │◀── progress events ─────│── UPDATE progress ───────▶│
-   │◀── progress events ─────│── UPDATE progress ───────▶│
-   │◀── result event ────────│── INSERT analysis_reports ▶│
+   │                          │  (pipeline.run_with_progress() 실행)
+   │                          │── UPDATE progress_pct ───▶│ (partial_result 누적)
+   │                          │── UPDATE progress_pct ───▶│
+   │                          │── INSERT analysis_reports ▶│
    │                          │── UPDATE status=completed ▶│
    │                          │                          │
-   │ (나갔다가 돌아온 경우)      │                          │
    │── GET /jobs/{id} ───────▶│── SELECT job ────────────▶│
-   │◀── { status, progress } │                          │
+   │◀── { status, progress,  │                          │
+   │     partial_result }     │                          │
+   │                          │                          │
    │── GET /reports/{id} ────▶│── SELECT report ──────────▶│
-   │◀── { 분석 결과 } ────────│                          │
+   │◀── { 분석 결과 전체 } ───│                          │
 ```
+
+> 프론트는 1.5~3초 간격으로 `GET /jobs/{id}` 를 폴링해 `progress_pct`와 `partial_result`를 수신한다.
+> `status=completed`가 되면 `report_id`로 리포트 상세를 조회한다.
 
 ---
 
@@ -62,10 +63,10 @@
 | `industry` | TEXT | 산업군 |
 | `career_level` | TEXT | `신입` / `경력` |
 | `resume_text` | TEXT | PDF에서 파싱한 이력서 원문 |
-| `current_step` | INT | 현재 단계 번호 (2~6) |
-| `step_label` | TEXT | 단계 표시 문자열 (예: "뉴스 검색 완료") |
-| `step_detail` | TEXT | 상세 메시지 (예: "15건 매칭") |
 | `progress_pct` | INT | 진행률 0~100 |
+| `retry_count` | INT | 워커 재시도 횟수 (기본 0) |
+| `partial_result` | JSONB | 단계별 완료 결과 (폴링용 점진적 렌더링, 기본 `{}`) |
+| `report_id` | UUID FK | 완료 후 analysis_reports.id 참조 (nullable) |
 | `created_at` | TIMESTAMPTZ | job 생성 시각 |
 | `started_at` | TIMESTAMPTZ | 워커가 처리 시작한 시각 |
 | `completed_at` | TIMESTAMPTZ | 완료 또는 실패 시각 |
@@ -162,18 +163,18 @@ career_level str        "신입" | "경력" (기본: "신입")
     {
       "job_id": "...",
       "status": "completed",
-      "current_step": 6,
-      "step_label": "리포트 생성 완료",
-      "step_detail": "",
       "progress_pct": 100,
+      "retry_count": 0,
       "company": "삼성전자",
       "job_title": "소프트웨어 엔지니어",
       "industry": "전자",
+      "career_level": "신입",
       "created_at": "2026-03-12T10:00:00Z",
       "started_at": "2026-03-12T10:00:03Z",
       "completed_at": "2026-03-12T10:01:20Z",
       "error_msg": null,
-      "report_id": "..."
+      "report_id": "...",
+      "partial_result": {}
     }
   ]
 }
@@ -189,29 +190,6 @@ career_level str        "신입" | "경력" (기본: "신입")
 
 - `status=completed` 이면 `report_id` 가 채워져 있음
 - `status=failed` 이면 `error_msg` 에 원인이 있음
-
----
-
-### `GET /api/v1/jobs/{job_id}/stream` — SSE 진행상황 구독
-
-**역할:** SSE로 실시간 진행상황 수신. **기존 `/report/stream`과 이벤트 형식 동일**하므로
-프론트의 SSE 파서를 재사용할 수 있다.
-
-**특징:**
-- DB를 1.5초마다 폴링해 `progress_pct` 변화 감지 시 이벤트 발송
-- **재접속 지원:** 사용자가 나갔다가 돌아와도 연결하면 현재 상태부터 이어서 수신
-- job이 이미 `completed`이면 즉시 result 이벤트를 발송하고 스트림 종료
-
-**이벤트 형식:**
-```
-data: {"type": "progress", "step": 4, "status": "done", "label": "뉴스 검색 완료", "detail": "15건 매칭", "progress_pct": 55}
-
-data: {"type": "result", "data": { ...ReportResponse... }}
-
-data: {"type": "error", "message": "..."}
-```
-
-> `progress_pct` 필드가 기존 `/report/stream` 이벤트에 추가된 유일한 차이점이다.
 
 ---
 

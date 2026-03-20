@@ -10,8 +10,9 @@
 | `docs/03_api_spec.md` | 전체 API 엔드포인트 명세 (프론트 연동 + Job 시스템 포함) |
 | `docs/04_benchmark_spec.md` | 검색 성능 벤치마크 실험 |
 | `docs/05_report_jobs_spec.md` | 비동기 Job 시스템 — DB 구조, Worker, 엔드포인트 명세 |
-| `docs/PIPELINE.md` | 오프라인 데이터 파이프라인 (Phase 1~4) |
 | `docs/ASYNC_JOB_SYSTEM.md` | Job 시스템 구현 기록 (2026-03-12 완료) — 프론트엔드 연동 포함 |
+| `docs/ARCHITECTURE.md` | 서비스 계층 리팩토링 기록 (Tier 1/2/3, DI 체인) |
+| `docs/PIPELINE.md` | 오프라인 뉴스 데이터 처리 파이프라인 (Phase 1~5) |
 
 ---
 
