@@ -36,10 +36,10 @@ CREATE TABLE analysis_jobs (
     industry      TEXT,
     career_level  TEXT        NOT NULL DEFAULT '신입',
     resume_text   TEXT,                                   -- PDF 파싱 완료된 원문 (최대 5MB 분량)
-    current_step  INTEGER,                                -- 현재 파이프라인 단계 (2~6)
-    step_label    TEXT,                                   -- 단계 표시 문자열 (예: "뉴스 검색 완료")
-    step_detail   TEXT,                                   -- 부가 메시지 (예: "15건 매칭")
     progress_pct  INTEGER,                                -- 진행률 0~100
+    retry_count   INTEGER     NOT NULL DEFAULT 0,         -- 워커 재시도 횟수
+    partial_result JSONB      NOT NULL DEFAULT '{}',      -- 단계별 완료 결과 (폴링용 점진적 렌더링)
+    report_id     UUID REFERENCES analysis_reports(id) ON DELETE SET NULL, -- 완료 후 결과 리포트 FK
     error_msg     TEXT,                                   -- 실패 시 에러 메시지
     created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
     started_at    TIMESTAMPTZ,                            -- 워커가 처리 시작한 시각
@@ -291,30 +291,33 @@ class JobCreateResponse(BaseModel):
     status: str       # "pending"
     message: str
 
-class JobStatus(BaseModel):
-    job_id: UUID
-    status: str       # pending | running | completed | failed
-    current_step: Optional[int]
-    step_label: Optional[str]
-    step_detail: Optional[str]
-    progress_pct: Optional[int]
-    company: Optional[str]
-    job_title: Optional[str]
-    industry: Optional[str]
-    career_level: str
-    created_at: datetime
-    started_at: Optional[datetime]
-    completed_at: Optional[datetime]
-    error_msg: Optional[str]
-    report_id: Optional[UUID]
+class JobStatus(str, Enum):
+    """Job 상태 열거형."""
+    pending = "pending"
+    running = "running"
+    completed = "completed"
+    failed = "failed"
 
-class JobSummary(BaseModel):
-    """목록 조회용 — result(대용량) 제외"""
-    job_id: UUID
-    status: str
-    company: Optional[str]
-    job_title: Optional[str]
+class JobStatusResponse(BaseModel):
+    """GET /jobs/{id} 응답 — 상태 폴링용."""
+    job_id: str
+    status: JobStatus
+    progress_pct: int = 0
+    retry_count: int = 0           # 워커 재시도 횟수
+    company: Optional[str] = None
+    job_title: Optional[str] = None
+    industry: Optional[str] = None
+    career_level: Optional[str] = None
     created_at: datetime
+    started_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
+    error_msg: Optional[str] = None
+    report_id: Optional[str] = None
+    partial_result: Optional[dict] = None  # 단계별 완료 결과 (점진적 렌더링)
+
+class JobListResponse(BaseModel):
+    """GET /jobs 목록 응답."""
+    jobs: list[JobStatusResponse]
 ```
 
 ---
