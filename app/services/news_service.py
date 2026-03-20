@@ -138,17 +138,25 @@ class NewsService:
     ) -> list[NewsChunk]:
         """멀티쿼리 하이브리드 검색 — 각 쿼리 hybrid_search 병렬 실행 후 RRF 합산.
 
+        각 쿼리를 벡터 검색과 키워드 검색 모두에 사용한다.
+        keyword_query가 있으면 기업명을 쿼리 앞에 앵커로 붙여 정밀도를 높인다.
+
         Args:
             queries:       transform_query가 생성한 검색 쿼리 리스트
-            keyword_query: pg_trgm 키워드 검색용 (보통 기업명)
+            keyword_query: 기업명 등 앵커 키워드 (각 쿼리 앞에 prefix로 붙임)
             top_k:         최종 반환 청크 수
         """
         if not queries:
             return []
 
+        def _kw(q: str) -> str:
+            if keyword_query and keyword_query not in q:
+                return f"{keyword_query} {q}"
+            return q
+
         with ThreadPoolExecutor(max_workers=len(queries)) as executor:
             futures = [
-                executor.submit(self.hybrid_search, q, keyword_query, category_l2, top_k * 3)
+                executor.submit(self.hybrid_search, q, _kw(q), category_l2, top_k * 3)
                 for q in queries
             ]
             result_lists = [f.result() for f in futures]
