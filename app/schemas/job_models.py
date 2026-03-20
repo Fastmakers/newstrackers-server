@@ -25,18 +25,18 @@ class JobCreateResponse(BaseModel):
 class JobStatusResponse(BaseModel):
     job_id: str
     status: JobStatus
-    current_step: Optional[int] = None
-    step_label: Optional[str] = None
-    step_detail: Optional[str] = None
     progress_pct: int = 0
+    retry_count: int = 0
     company: Optional[str] = None
     job_title: Optional[str] = None
     industry: Optional[str] = None
+    career_level: Optional[str] = None
     created_at: datetime
     started_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None
     error_msg: Optional[str] = None
-    report_id: Optional[str] = None  # completed 시 채워짐
+    report_id: Optional[str] = None
+    partial_result: Optional[dict[str, Any]] = None
 
 
 class JobListResponse(BaseModel):

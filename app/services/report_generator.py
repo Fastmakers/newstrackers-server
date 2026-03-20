@@ -1,7 +1,7 @@
 """리포트 생성 서비스 — Claude Sonnet 기반 취업 전략 리포트 생성."""
 
 import logging
-from typing import Dict, List
+from typing import Dict, List, Tuple
 
 from app.services.llm_client import LLMClient
 
@@ -46,7 +46,7 @@ class ReportGenerator(LLMClient):
 지원자의 자소서와 {company}{industry_hint} 관련 뉴스를 분석해,
 지원자가 이 기업에 지원했을 때의 관점에서 SWOT 분석을 수행합니다.
 {career_context}
-반드시 JSON 형식으로만 응답하세요."""
+반드시 유효한 JSON만 응답하세요. 마크다운 펜스, 설명 텍스트, trailing comma 없이 순수 JSON 객체만 출력하세요."""
 
         user_message = f"""다음 정보를 바탕으로 지원자의 SWOT 분석을 작성하세요.
 분석 기준은 '{company}'의 '{job_title}' 직무 {career_level} 지원입니다.
@@ -165,28 +165,23 @@ class ReportGenerator(LLMClient):
             logger.error("generate_relevance_analysis 실패: %s", e)
             return ""
 
-    def generate_final_report(
+    def _build_final_report_prompt(
         self,
         resume: str,
         company: str,
         job_title: str,
         industry: str,
         swot: Dict[str, List[str]],
-        relevance_analysis: str = "",
-        career_level: str = "신입",
-    ) -> str:
-        """면접 준비 포인트 + 최종 권고사항 리포트 (마크다운 반환).
-
-        프론트엔드 FinalReportSummary 컴포넌트에서
-        '면접 준비 포인트'와 '최종 권고사항' 섹션을 파싱해 사용.
-        """
+        relevance_analysis: str,
+        career_level: str,
+    ) -> Tuple[str, str]:
+        """generate_final_report / stream_final_report 공통 프롬프트 빌더."""
         swot_summary = (
             f"강점: {'; '.join(swot.get('strengths', [])[:2])}\n"
             f"약점: {'; '.join(swot.get('weaknesses', [])[:2])}\n"
             f"기회: {'; '.join(swot.get('opportunities', [])[:2])}\n"
             f"위협: {'; '.join(swot.get('threats', [])[:2])}"
         )
-
         career_instruction = (
             "지원자는 신입입니다. 면접 질문과 권고사항은 실무 경험 대신 "
             "학습 의지·성장 가능성·잠재력·학업 성취를 부각하는 방향으로 작성하세요. "
@@ -194,7 +189,6 @@ class ReportGenerator(LLMClient):
             if career_level == "신입" else
             "지원자는 경력직입니다. 면접 질문과 권고사항은 즉시 전력 여부·기존 성과·전문성·이직 사유를 다루는 방향으로 작성하세요."
         )
-
         system_prompt = f"""당신은 취업 면접 코치입니다.
 지원자 정보와 SWOT 분석, 산업 연관성 분석을 바탕으로 실전 면접 전략 리포트를 작성합니다.
 {career_instruction}
@@ -244,6 +238,26 @@ class ReportGenerator(LLMClient):
 ### 차별화 전략
 [지원자만의 차별점과 면접에서 집중 강조할 핵심 포인트 2~3문장]"""
 
+        return system_prompt, user_message
+
+    def generate_final_report(
+        self,
+        resume: str,
+        company: str,
+        job_title: str,
+        industry: str,
+        swot: Dict[str, List[str]],
+        relevance_analysis: str = "",
+        career_level: str = "신입",
+    ) -> str:
+        """면접 준비 포인트 + 최종 권고사항 리포트 (마크다운 반환).
+
+        프론트엔드 FinalReportSummary 컴포넌트에서
+        '면접 준비 포인트'와 '최종 권고사항' 섹션을 파싱해 사용.
+        """
+        system_prompt, user_message = self._build_final_report_prompt(
+            resume, company, job_title, industry, swot, relevance_analysis, career_level
+        )
         try:
             return self._call_claude(system_prompt, user_message, temperature=0.6, max_tokens=3500)
         except Exception as e:

@@ -1,3 +1,4 @@
+
 # 00_system_architecture.md — 시스템 전체 구조 및 공통 원칙
 
 > **이 문서는 모든 AI 에이전트가 작업 전 반드시 읽어야 하는 최우선 컨텍스트입니다.**
@@ -7,29 +8,29 @@
 
 ## 1. Project Overview
 
-| 항목 | 내용 |
-|------|------|
-| **프로젝트명** | NewsTrackers AI Server |
-| **목표** | 매일경제 뉴스 기반 취업 준비 AI 서비스 — 산업 트렌드 분석 + 기업 SWOT + 면접 Q&A |
-| **데이터 소스** | 매일경제 2025년 전체 기사 (news_articles 188,379건) |
-| **운영 환경** | AWS RDS PostgreSQL + FastAPI (uvicorn) |
+| 항목            | 내용                                                                             |
+| --------------- | -------------------------------------------------------------------------------- |
+| **프로젝트명**  | NewsTrackers AI Server                                                           |
+| **목표**        | 매일경제 뉴스 기반 취업 준비 AI 서비스 — 산업 트렌드 분석 + 기업 SWOT + 면접 Q&A |
+| **데이터 소스** | 매일경제 2025년 전체 기사 (news_articles 188,379건)                              |
+| **운영 환경**   | AWS RDS PostgreSQL + FastAPI (uvicorn)                                           |
 
 ---
 
 ## 2. Tech Stack
 
-| 레이어 | 기술 | 버전/모델 |
-|--------|------|-----------|
-| **API** | FastAPI + Uvicorn | `>=0.115.0` |
-| **ORM** | SQLAlchemy | `>=2.0.0` |
-| **DB** | PostgreSQL (AWS RDS) | pgvector 확장 필수 |
-| **벡터 검색** | pgvector (`<=>` cosine distance) | dim=1536 |
-| **키워드 검색** | pg_trgm (`word_similarity`) | GIN 인덱스 필수 |
-| **LLM (분석)** | Claude `claude-sonnet-4-6` | Anthropic SDK |
-| **임베딩** | OpenAI `text-embedding-3-small` | dim=1536 |
-| **형태소 분석** | kiwipiepy | `>=0.18.0` |
-| **리랭킹** | `BAAI/bge-reranker-v2-m3` | sentence-transformers |
-| **스키마 마이그레이션** | Alembic | `>=1.13.0` |
+| 레이어                  | 기술                             | 버전/모델             |
+| ----------------------- | -------------------------------- | --------------------- |
+| **API**                 | FastAPI + Uvicorn                | `>=0.115.0`           |
+| **ORM**                 | SQLAlchemy                       | `>=2.0.0`             |
+| **DB**                  | PostgreSQL (AWS RDS)             | pgvector 확장 필수    |
+| **벡터 검색**           | pgvector (`<=>` cosine distance) | dim=1536              |
+| **키워드 검색**         | pg_trgm (`word_similarity`)      | GIN 인덱스 필수       |
+| **LLM (분석)**          | Claude `claude-sonnet-4-6`       | Anthropic SDK         |
+| **임베딩**              | OpenAI `text-embedding-3-small`  | dim=1536              |
+| **형태소 분석**         | kiwipiepy                        | `>=0.18.0`            |
+| **리랭킹**              | `BAAI/bge-reranker-v2-m3`        | sentence-transformers |
+| **스키마 마이그레이션** | Alembic                          | `>=1.13.0`            |
 
 ---
 
@@ -164,23 +165,23 @@ news_articles DB
 
 ## 4. 레이어별 책임 경계
 
-| 레이어 | 책임 O | 책임 X |
-|--------|--------|--------|
-| **Endpoint** | HTTP 요청 파싱, 응답 직렬화, HTTP 에러 변환 | 비즈니스 로직, DB 접근 |
-| **Service** | 검색 오케스트레이션, LLM 호출, 병렬 실행 | 직접 SQL 작성 |
-| **Repository** | SQL 쿼리 캡슐화, ORM 사용 | 비즈니스 판단 |
-| **Adapter** | DB Row → Domain Model 변환 | 외부 API 호출 |
-| **Domain Model** | 데이터 구조 정의 (Pydantic) | 부작용(side effect) |
+| 레이어           | 책임 O                                      | 책임 X                 |
+| ---------------- | ------------------------------------------- | ---------------------- |
+| **Endpoint**     | HTTP 요청 파싱, 응답 직렬화, HTTP 에러 변환 | 비즈니스 로직, DB 접근 |
+| **Service**      | 검색 오케스트레이션, LLM 호출, 병렬 실행    | 직접 SQL 작성          |
+| **Repository**   | SQL 쿼리 캡슐화, ORM 사용                   | 비즈니스 판단          |
+| **Adapter**      | DB Row → Domain Model 변환                  | 외부 API 호출          |
+| **Domain Model** | 데이터 구조 정의 (Pydantic)                 | 부작용(side effect)    |
 
 ---
 
 ## 5. 검색 파이프라인 버전 (V1 / V2 / V3)
 
-| 버전 | 방식 | 사용 위치 |
-|------|------|-----------|
+| 버전   | 방식                            | 사용 위치         |
+| ------ | ------------------------------- | ----------------- |
 | **V1** | 벡터 검색 + title 기업명 보너스 | `vector_search()` |
-| **V2** | 벡터 ‖ pg_trgm 병렬 → RRF | `hybrid_search()` |
-| **V3** | V2 + Cross-Encoder 리랭킹 | `rerank_chunks()` |
+| **V2** | 벡터 ‖ pg_trgm 병렬 → RRF       | `hybrid_search()` |
+| **V3** | V2 + Cross-Encoder 리랭킹       | `rerank_chunks()` |
 
 > 상세 스펙: `docs/02_search_pipeline_spec.md`
 
@@ -188,13 +189,33 @@ news_articles DB
 
 ## 6. 엔드포인트 목록
 
-| 엔드포인트 | 방식 | 사용 |
-|------------|------|------|
-| `POST /analysis/report` | 배치 JSON | **프론트엔드 전용** |
-| `POST /resume/analyze` | 배치 JSON | 자소서 단독 분석 |
-| `POST /resume/parse` | 배치 JSON | 텍스트 추출만 |
-| `POST /search` | 배치 JSON | RAG 검색 직접 호출 |
-| `GET /health` | JSON | 헬스체크 |
+모든 경로 앞에 `/api/v1` 프리픽스 붙음.
+
+### 분석 리포트 (즉시 응답)
+
+| 엔드포인트                     | 방식 | Auth | 설명                               |
+| ------------------------------ | ---- | ---- | ---------------------------------- |
+| `POST /analysis/report`        | JSON | ❌    | 자소서 분석 종합 리포트 (배치)     |
+| `POST /analysis/report/stream` | SSE  | ❌    | 자소서 분석 종합 리포트 (스트리밍) |
+
+### 비동기 Job 시스템 (결과 영속 저장)
+
+| 엔드포인트                      | 방식 | Auth | 설명                                      |
+| ------------------------------- | ---- | ---- | ----------------------------------------- |
+| `POST /jobs`                    | JSON | 선택 | Job 생성 — PDF 파싱 후 즉시 `job_id` 반환 |
+| `GET /jobs`                     | JSON | 선택 | 내 Job 목록 (토큰 없으면 빈 배열)         |
+| `GET /jobs/{job_id}`            | JSON | ❌    | Job 상태 조회 (폴링용)                    |
+| `GET /jobs/reports`             | JSON | 선택 | 내 완료 리포트 목록                       |
+| `GET /jobs/reports/{report_id}` | JSON | ❌    | 리포트 상세 조회                          |
+
+### 기타
+
+| 엔드포인트             | 방식 | 설명                              |
+| ---------------------- | ---- | --------------------------------- |
+| `POST /resume/analyze` | JSON | 자소서 단독 분석 (뉴스 검색 없음) |
+| `POST /resume/parse`   | JSON | PDF 텍스트 추출만                 |
+| `POST /search`         | JSON | RAG 검색 직접 호출                |
+| `GET /health`          | JSON | 헬스체크                          |
 
 ---
 
@@ -272,6 +293,7 @@ article.category_l2
    - API 관련 → `docs/03_api_spec.md`
    - 성능 실험 → `docs/04_benchmark_spec.md`
    - 데이터 파이프라인 → `docs/PIPELINE.md`
+   - Job 큐 / 분석 이력 / 진행 상태 영속화 → `docs/05_report_jobs_spec.md`
 
 ---
 
@@ -279,34 +301,39 @@ article.category_l2
 
 ### 실시간 API (온라인)
 
-| 파일 | 역할 | Pipeline |
-|------|------|----------|
-| `app/core/config.py` | Pydantic Settings — 환경 변수 로딩 | 공통 |
-| `app/core/dependencies.py` | FastAPI Depends — 서비스 인스턴스 제공 | 공통 |
-| `app/db/base.py` | SQLAlchemy 엔진 + SessionLocal | 공통 |
-| `app/db/models.py` | ORM (NewsArticleDB, NewsChunkDB) | 공통 |
-| `app/db/adapters/news_adapter.py` | DB Row → Domain Model 변환 | 공통 |
-| `app/db/repositories/news_repository.py` | SQL 쿼리 (vector/trgm/ilike) | A, B |
-| `app/schemas/data_models.py` | Pydantic 도메인 모델 전체 | 공통 |
-| `app/services/news_service.py` | V1/V2/V3 검색 오케스트레이션 | A, B |
-| `app/services/llm_service.py` | Claude 호출 (분석 + 스트리밍) | C, E |
-| `app/services/search/rrf.py` | RRF 융합 (k=60) | E |
-| `app/services/search/reranker.py` | Cross-Encoder V3 (lazy-load) | - |
-| `app/api/v1/endpoints/analysis.py` | Pipeline E — `/report` (프론트 전용) | E |
-| `app/api/v1/endpoints/resume.py` | Pipeline C — 자소서 단독 | C |
-| `app/api/v1/endpoints/search.py` | RAG 검색 직접 호출 | - |
+| 파일                                     | 역할                                     | Pipeline |
+| ---------------------------------------- | ---------------------------------------- | -------- |
+| `app/core/config.py`                     | Pydantic Settings — 환경 변수 로딩       | 공통     |
+| `app/core/dependencies.py`               | FastAPI Depends — 서비스 인스턴스 제공   | 공통     |
+| `app/db/base.py`                         | SQLAlchemy 엔진 + SessionLocal           | 공통     |
+| `app/db/models.py`                       | ORM (NewsArticleDB, NewsChunkDB)         | 공통     |
+| `app/db/adapters/news_adapter.py`        | DB Row → Domain Model 변환               | 공통     |
+| `app/db/repositories/news_repository.py` | SQL 쿼리 (vector/trgm/ilike)             | A, B     |
+| `app/schemas/data_models.py`             | Pydantic 도메인 모델 전체                | 공통     |
+| `app/services/news_service.py`           | V1/V2/V3 검색 오케스트레이션             | A, B     |
+| `app/services/llm_service.py`            | Claude 호출 (분석 + 스트리밍)            | C, E     |
+| `app/services/search/rrf.py`             | RRF 융합 (k=60)                          | E        |
+| `app/services/search/reranker.py`        | Cross-Encoder V3 (lazy-load)             | -        |
+| `app/api/v1/endpoints/analysis.py`       | Pipeline E — `/report`, `/report/stream` | E        |
+| `app/api/v1/endpoints/resume.py`         | Pipeline C — 자소서 단독                 | C        |
+| `app/api/v1/endpoints/search.py`         | RAG 검색 직접 호출                       | -        |
+| `app/api/v1/endpoints/jobs.py`           | Job 큐 — `/jobs`, `/jobs/reports` 전체   | -        |
+| `app/services/worker.py`                 | 비동기 Job 워커 (asyncio, 3초 폴링)      | -        |
+| `app/db/repositories/job_repository.py`  | Job/Report CRUD                          | -        |
+| `app/schemas/job_models.py`              | Job/Report API 스키마                    | -        |
+| `app/core/auth.py`                       | JWT 인증 의존성 (`get_optional_user_id`) | -        |
 
 ### 오프라인 배치 (Pipeline D)
 
-| 파일 | 역할 |
-|------|------|
-| `app/analysis/text_cleaner.py` | Regex 노이즈 제거 |
-| `app/analysis/lexical_diversity.py` | LogTTR 노이즈 탐지 |
-| `app/analysis/ngram_extractor.py` | TF-IDF N-gram 키워드 |
-| `app/analysis/ner_extractor.py` | NER/POS 개체명 인식 |
-| `scripts/run_pipeline.py` | Phase 1~3 통합 실행 |
-| `scripts/benchmark_search.py` | 검색 성능 벤치마크 (E1~E4) |
-| `data/lexical_diversity.json` | 노이즈 기사 ID 목록 |
-| `data/ngrams.json` | 카테고리별 키워드 |
-| `data/ner_result.json` | ORG·PERSON·LOC·동사 |
+| 파일                                | 역할                       |
+| ----------------------------------- | -------------------------- |
+| `app/analysis/text_cleaner.py`      | Regex 노이즈 제거          |
+| `app/analysis/lexical_diversity.py` | LogTTR 노이즈 탐지         |
+| `app/analysis/ngram_extractor.py`   | TF-IDF N-gram 키워드       |
+| `app/analysis/ner_extractor.py`     | NER/POS 개체명 인식        |
+| `scripts/run_pipeline.py`           | Phase 1~3 통합 실행        |
+| `scripts/benchmark_search.py`       | 검색 성능 벤치마크 (E1~E4) |
+| `data/lexical_diversity.json`       | 노이즈 기사 ID 목록        |
+| `data/ngrams.json`                  | 카테고리별 키워드          |
+| `data/ner_result.json`              | ORG·PERSON·LOC·동사        |
 

@@ -1,54 +1,210 @@
 # 03_api_spec.md — API 엔드포인트 명세
 
 > **Single Source of Truth for all API endpoints.**
-> 프론트엔드 연동 엔드포인트 / 내부 서비스 엔드포인트 / 데이터 모델 전체 포함.
+> 현재 라우터에 등록된 엔드포인트만 기재. (`app/api/v1/router.py` 기준)
 
 ---
 
-## 1. 프론트엔드 연동 엔드포인트
+## 현재 활성 엔드포인트 목록
 
-프론트엔드가 실제로 호출하는 엔드포인트는 **두 개**입니다 (배치 / SSE 스트리밍).
-
-### POST `/api/v1/analysis/report/stream` ← 프론트엔드 기본 호출 (SSE)
-
-SSE(Server-Sent Events) 스트리밍으로 진행 단계를 실시간 전송하고 최종 결과를 반환합니다.
-
-이벤트 형식:
-```
-data: {"type": "progress", "step": 1, "status": "start"|"done", "label": "...", "detail": "..."}
-data: {"type": "result", "data": {...ReportResponse...}}
-data: {"type": "error", "message": "..."}
-```
-
-Request / Response 구조는 `/report`와 동일합니다.
+| 메서드 | 경로 | 설명 |
+|---|---|---|
+| `GET` | `/api/v1/health` | 헬스체크 |
+| `POST` | `/api/v1/auth/register` | 회원가입 |
+| `POST` | `/api/v1/auth/login` | 로그인 |
+| `GET` | `/api/v1/auth/me` | 내 정보 |
+| `POST` | `/api/v1/jobs` | 분석 Job 생성 |
+| `GET` | `/api/v1/jobs` | 내 Job 목록 |
+| `GET` | `/api/v1/jobs/{job_id}` | Job 상태 단건 조회 |
+| `GET` | `/api/v1/jobs/reports` | 내 완료 리포트 목록 |
+| `GET` | `/api/v1/jobs/reports/{report_id}` | 리포트 상세 |
 
 ---
 
-### POST `/api/v1/analysis/report`
+## 1. 인증 엔드포인트
 
-자소서 PDF를 업로드하면 산업 뉴스 기반 종합 취업 전략 리포트를 반환합니다.
+### POST `/api/v1/auth/register`
 
-#### Request (multipart/form-data)
+**Request (JSON)**
+```json
+{ "email": "user@example.com", "nickname": "닉네임", "password": "..." }
+```
+
+**Response `201`**
+```json
+{
+  "access_token": "eyJ...",
+  "token_type": "bearer",
+  "user": { "email": "user@example.com", "nickname": "닉네임" }
+}
+```
+
+| 오류 | 조건 |
+|---|---|
+| `400` | 이미 등록된 이메일 |
+
+---
+
+### POST `/api/v1/auth/login`
+
+**Request (JSON)**
+```json
+{ "email": "user@example.com", "password": "..." }
+```
+
+**Response `200`** — register와 동일 구조
+
+| 오류 | 조건 |
+|---|---|
+| `401` | 이메일 또는 비밀번호 불일치 |
+
+---
+
+### GET `/api/v1/auth/me`
+
+**Header:** `Authorization: Bearer <token>` (필수)
+
+**Response `200`**
+```json
+{ "email": "user@example.com", "nickname": "닉네임" }
+```
+
+---
+
+## 2. 분석 Job 엔드포인트
+
+프론트엔드가 사용하는 주 흐름:
+```
+POST /jobs → job_id 획득 → GET /jobs/{job_id} 폴링 → completed 시 GET /jobs/reports/{report_id}
+```
+
+분석 로직은 워커(`app/services/worker.py`)가 백그라운드에서 `ReportPipeline`을 실행.
+진행상황은 DB의 `progress_pct` 컬럼으로 추적, 프론트는 3초 간격 폴링으로 확인.
+
+---
+
+### POST `/api/v1/jobs` — Job 생성
+
+**Request (multipart/form-data)**
 
 | 필드 | 타입 | 필수 | 설명 |
 |---|---|---|---|
-| `file` | File (PDF) | ✅ | 자소서 PDF 파일 (최대 5 MB) |
-| `industry` | string | 선택 | 희망 산업군 (예: `반도체`, `AI 인공지능`) |
+| `file` | File (PDF) | ✅ | 자소서 PDF (최대 5 MB) |
 | `company` | string | 선택 | 목표 기업 (예: `삼성전자`) |
 | `job_title` | string | 선택 | 희망 직무 (예: `백엔드 개발자`) |
-| `career_level` | string | 선택 | `"신입"` \| `"경력"` (기본값: `"신입"`) |
-| `include_raw_news` | string | 선택 | `"true"` 고정 (프론트 하드코딩, 서버에서 무시) |
-| `report_mode` | string | 선택 | `"fast"` 고정 (프론트 하드코딩, 서버에서 무시) |
+| `industry` | string | 선택 | 희망 산업군 (예: `반도체`) |
+| `career_level` | string | 선택 | `"신입"` \| `"경력"` (기본: `"신입"`) |
 
-> `company`, `job_title`, `industry` 가 Form에 없으면 자소서 분석 결과에서 자동 추론합니다.
-> `career_level` 은 모든 LLM 프롬프트에 반영됩니다:
-> - `"신입"` → 성장 가능성·학습 의지·잠재력 기준, 실무 경험 부재를 고려한 평가
-> - `"경력"` → 즉시 전력·전문성·성과 기준, 이직 동기와 경력 활용도 중심 평가
+> `company`, `job_title`, `industry` 가 없으면 자소서 분석 결과에서 자동 추론.
+> `career_level` 은 모든 LLM 프롬프트에 반영:
+> - `"신입"` → 성장 가능성·학습 의지·잠재력 기준
+> - `"경력"` → 즉시 전력·전문성·성과·이직 동기 기준
 
-#### Response (JSON) — `ReportResponse`
-
+**Response `202 Accepted`**
 ```json
 {
+  "job_id": "550e8400-e29b-41d4-a716-446655440000",
+  "status": "pending",
+  "message": "분석 요청이 접수되었습니다. GET /jobs/{job_id} 로 진행상황을 확인하세요."
+}
+```
+
+| 오류 | 조건 |
+|---|---|
+| `422` | 파일 없음 / 텍스트 추출 실패 |
+| `413` | 파일 크기 > 5 MB |
+| `415` | PDF 이외 파일 형식 |
+
+---
+
+### GET `/api/v1/jobs` — 내 Job 목록
+
+**Header:** `Authorization: Bearer <token>` (없으면 빈 배열 반환)
+
+**Response `200`**
+```json
+{
+  "jobs": [
+    {
+      "job_id": "550e8400-...",
+      "status": "completed",
+      "progress_pct": 100,
+      "retry_count": 0,
+      "company": "삼성전자",
+      "job_title": "백엔드 개발자",
+      "industry": "반도체",
+      "career_level": "신입",
+      "created_at": "2026-03-12T10:00:00Z",
+      "started_at": "2026-03-12T10:00:03Z",
+      "completed_at": "2026-03-12T10:01:20Z",
+      "error_msg": null,
+      "report_id": "661f9500-..."
+    }
+  ]
+}
+```
+
+`status` 값: `pending` | `running` | `completed` | `failed`
+
+---
+
+### GET `/api/v1/jobs/{job_id}` — Job 상태 단건 조회
+
+프론트 폴링 전용. 3초 간격 권장.
+
+**Response `200`** — Job 목록의 단일 객체와 동일 구조
+
+`status=completed` 이면 `report_id` 포함.
+`status=failed` 이면 `error_msg` 포함.
+
+#### 진행률 매핑 (`progress_pct`)
+
+| 단계 | `progress_pct` | 설명 |
+|---|---|---|
+| job 생성 (pending) | 0 | 워커 대기 중 |
+| 워커 픽업 (running 시작) | 10 | PDF 파싱 완료 (job 생성 시 완료됨) |
+| 자소서 AI 분석 완료 | 25 | Claude Haiku |
+| 검색 쿼리 최적화 완료 | 30 | Claude Haiku |
+| 뉴스 하이브리드 검색 완료 | 55 | pgvector + pg_trgm RRF |
+| SWOT + 산업 분석 완료 | 80 | Claude Sonnet (병렬) |
+| 최종 리포트 생성 완료 | 100 | Claude Sonnet |
+
+| 오류 | 조건 |
+|---|---|
+| `404` | job_id 존재하지 않음 |
+
+---
+
+### GET `/api/v1/jobs/reports` — 내 완료 리포트 목록
+
+**Header:** `Authorization: Bearer <token>` (없으면 빈 배열 반환)
+
+**Response `200`**
+```json
+{
+  "reports": [
+    {
+      "report_id": "661f9500-...",
+      "job_id": "550e8400-...",
+      "company": "삼성전자",
+      "job_title": "백엔드 개발자",
+      "industry": "반도체",
+      "matched_news_count": 15,
+      "created_at": "2026-03-12T10:01:20Z"
+    }
+  ]
+}
+```
+
+---
+
+### GET `/api/v1/jobs/reports/{report_id}` — 리포트 상세
+
+**Response `200`**
+```json
+{
+  "report_id": "661f9500-...",
+  "job_id": "550e8400-...",
   "resume_profile": {
     "company": "삼성전자",
     "job_title": "백엔드 개발자",
@@ -67,163 +223,30 @@ Request / Response 구조는 `/report`와 동일합니다.
     }
   ],
   "matched_news_count": 15,
-  "relevance_analysis": "### 산업 트렌드 요약\n...\n### 역량 연결 포인트\n...",
+  "relevance_analysis": "### 산업 트렌드 요약\n...",
   "swot": {
-    "strengths": ["핵심 강점 1", "핵심 강점 2"],
-    "weaknesses": ["약점 1", "약점 2"],
-    "opportunities": ["기회 1", "기회 2"],
-    "threats": ["위협 1", "위협 2"]
+    "strengths": ["강점 서술형 문장"],
+    "weaknesses": ["약점 서술형 문장"],
+    "opportunities": ["기회 서술형 문장"],
+    "threats": ["위협 서술형 문장"]
   },
-  "final_report": "## 면접 준비 포인트\n...\n## 최종 권고사항\n..."
+  "final_report": "## 면접 준비 포인트\n...",
+  "created_at": "2026-03-12T10:01:20Z"
 }
 ```
 
-> **SWOT 방향**: 지원자(자소서 작성자) 관점 SWOT — 해당 기업에 지원했을 때의 강점/약점/기회/위협.
-> 기업 자체의 SWOT 분석이 아닙니다.
->
-> **`distance` 필드 해석**: 하이브리드 검색(V2) 결과에서 벡터 매칭 아이템만 `distance > 0` 값을 가짐.
-> 키워드 전용 매칭 아이템은 `distance=0.0`. 프론트엔드는 `distance=0.0` 을 "키워드 매칭" 배지로 표시.
->
-> **유사도 표시**: `(1 - distance) * 100` 절대 수치. 특정 산업/기업 관련 기사가 적은 경우 낮은 수치가 그대로 보여야 판단 가능.
-> 벡터 매칭 없거나 평균 유사도 < 70% (distance > 0.3) 이면 낮은 관련성 경고 배너 표시.
+> **`distance` 필드**: 벡터 코사인 거리 0.0~1.0. `distance=0.0` 은 키워드 전용 매칭.
+> **SWOT 방향**: 지원자 관점 — 해당 기업에 지원했을 때의 강점/약점/기회/위협. 기업 자체 SWOT 아님.
 
-#### 파이프라인 단계
-
-```
-[1] PDF 파싱
-    → pypdf로 텍스트 추출 (최대 파일 크기: 5 MB)
-
-[2] 자소서 분석 — analyze_resume() (Claude Haiku)
-    → skills: List[str]              — 핵심 기술 스킬
-    → experience_keywords: List[str] — 경험 키워드
-    → target_role: str               — 희망 직무
-    → strengths: List[str]           — 강점
-    → search_keywords: List[str]     — 뉴스 검색 키워드
-
-[3] ResumeProfile 구성
-    → company:    Form 파라미터 우선
-    → job_title:  Form 파라미터 우선, 없으면 analyze_resume.target_role
-    → industry:   Form 파라미터 우선
-    → skills:     analyze_resume.skills
-    → experiences: analyze_resume.experience_keywords
-
-[4] 쿼리 변환 — transform_query() (Claude Haiku)
-    → 자소서 + company + job_title → 뉴스 검색 최적화 쿼리
-
-[5] 하이브리드 검색 + Cross-Encoder 리랭킹 (V3)
-    hybrid_search(query, keyword_query, top_k=40) → RRF 후보 40건
-    rerank_chunks(query, candidates, top_k=15)   → Cross-Encoder 재정렬 → Top 15
-    → MatchedNewsItem[] (distance: 벡터 코사인 거리, 키워드 전용은 0.0)
-
-[6] 병렬 LLM (Claude Sonnet) — swot ‖ relevance 동시 실행 → final_report
-    ├─ generate_swot_list(resume, company, job_title, chunks, industry)
-    │   → {"strengths": [...], "weaknesses": [...], "opportunities": [...], "threats": [...]}
-    │   출력 형식: 각 항목에 완전한 서술형 문장 2~3개 (키워드 나열 금지)
-    │   예: "지원자는 3년간 FastAPI로 대규모 백엔드 시스템을 구축해 온 경험이 있어,
-    │        삼성전자 DX부문의 MSA 전환 전략에 즉시 기여할 수 있습니다."
-    ├─ generate_relevance_analysis(resume, chunks, company, industry, job_title)
-    │   → markdown string — 반드시 아래 고정 템플릿 구조 출력:
-    │
-    │   ### 산업 트렌드 요약
-    │   - [뉴스 근거 트렌드 1 — 1~2문장]
-    │   - [뉴스 근거 트렌드 2 — 1~2문장]
-    │   - [뉴스 근거 트렌드 3 — 1~2문장]
-    │
-    │   ### 역량-트렌드 연결 포인트
-    │   - **[지원자 역량명]** — [트렌드와 어떻게 연결되는지 1~2문장]
-    │   - **[지원자 역량명]** — [트렌드와 어떻게 연결되는지 1~2문장]
-    │   - **[지원자 역량명]** — [트렌드와 어떻게 연결되는지 1~2문장]
-    │
-    │   ### 면접 활용 키워드
-    │   - **[키워드 1]**: [면접에서 활용하는 방법 1문장]
-    │   - **[키워드 2]**: [면접에서 활용하는 방법 1문장]
-    │   - **[키워드 3]**: [면접에서 활용하는 방법 1문장]
-    │
-    │   규칙: 각 섹션 정확히 3개 불릿 / 섹션 외 서문·결론 금지 / ### 헤딩 문자열 정확히 유지
-    └─ generate_final_report(resume, company, job_title, industry, swot, relevance_analysis)
-        → markdown string — 반드시 아래 고정 템플릿 구조 출력:
-
-        ## 면접 준비 포인트
-
-        ### Q1. [예상 질문 — 뉴스 트렌드 연관]
-        [질문 배경 1문장]
-        **핵심 답변 방향:** [2~3문장]
-
-        ### Q2. [예상 질문 — 지원자 경험 연관]
-        [질문 배경 1문장]
-        **핵심 답변 방향:** [2~3문장]
-
-        ### Q3. [예상 질문 — 직무 적합성 연관]
-        [질문 배경 1문장]
-        **핵심 답변 방향:** [2~3문장]
-
-        ---
-
-        ## 최종 권고사항
-
-        ### 핵심 준비 사항
-        1. **[항목명]** — [실행 방법 1~2문장]
-        2. **[항목명]** — [실행 방법 1~2문장]
-        3. **[항목명]** — [실행 방법 1~2문장]
-
-        ### 차별화 전략
-        [지원자만의 차별점 2~3문장]
-
-[7] ReportResponse 조립 및 반환
-```
-
-#### 에러 응답
-
-| 상태코드 | 조건 | 설명 |
-|---|---|---|
-| `422` | 파일 없음 | `detail: "자소서 PDF 파일이 필요합니다."` |
-| `422` | 텍스트 추출 실패 | `detail: "PDF에서 텍스트를 추출할 수 없습니다."` |
-| `413` | 파일 크기 > 5MB | `detail: "파일 크기 초과 (N KB). 최대 5 MB."` |
-| `415` | PDF 이외 파일 형식 | `detail: "PDF 파일만 지원합니다."` |
-
----
-
-## 2. 기타 엔드포인트
-
-### Pipeline C — 자소서 단독 분석
-
-#### POST `/api/v1/resume/analyze`
-
-| 항목 | 내용 |
+| 오류 | 조건 |
 |---|---|
-| Request | PDF 또는 DOCX 파일 (multipart) |
-| Response | `ResumeAnalysis` |
-
-```json
-{
-  "skills": ["Python", "FastAPI"],
-  "experience_keywords": ["백엔드 개발 3년"],
-  "target_role": "백엔드 개발자",
-  "strengths": ["문제 해결력"],
-  "search_keywords": ["삼성전자", "반도체"]
-}
-```
-
-#### POST `/api/v1/resume/parse`
-
-텍스트 추출만 수행 (LLM 호출 없음). `{ "text": "..." }` 반환.
+| `404` | report_id 존재하지 않음 |
 
 ---
 
-### 검색 엔드포인트
+## 3. 헬스체크
 
-#### POST `/api/v1/search`
-
-| 항목 | 내용 |
-|---|---|
-| Request | `{ "query": "...", "top_k": 10, "version": "v2" }` |
-| Response | 청크 리스트 |
-
----
-
-### 헬스체크
-
-#### GET `/api/v1/health`
+### GET `/api/v1/health`
 
 ```json
 {"status": "ok"}
@@ -231,11 +254,48 @@ Request / Response 구조는 `/report`와 동일합니다.
 
 ---
 
-## 3. 데이터 모델 (Pydantic)
+## 4. 데이터 모델 (Pydantic)
 
-모든 모델은 `app/schemas/data_models.py` 에 정의.
+### Job / Report 스키마 (`app/schemas/job_models.py`)
 
-### 프론트 연동 모델 (`/report` 엔드포인트)
+```python
+class JobStatusResponse(BaseModel):
+    job_id: str
+    status: JobStatus          # pending | running | completed | failed
+    progress_pct: int = 0
+    retry_count: int = 0
+    company: Optional[str]
+    job_title: Optional[str]
+    industry: Optional[str]
+    career_level: Optional[str]
+    created_at: datetime
+    started_at: Optional[datetime]
+    completed_at: Optional[datetime]
+    error_msg: Optional[str]
+    report_id: Optional[str]
+
+class ReportSummaryResponse(BaseModel):
+    report_id: str
+    job_id: str
+    company: Optional[str]
+    job_title: Optional[str]
+    industry: Optional[str]
+    matched_news_count: Optional[int]
+    created_at: datetime
+
+class ReportDetailResponse(BaseModel):
+    report_id: str
+    job_id: str
+    resume_profile: Optional[dict]
+    matched_news: Optional[list]
+    matched_news_count: Optional[int]
+    relevance_analysis: Optional[str]
+    swot: Optional[dict]
+    final_report: Optional[str]
+    created_at: datetime
+```
+
+### 리포트 내용 모델 (`app/schemas/data_models.py`)
 
 ```python
 class ResumeProfile(BaseModel):
@@ -251,10 +311,9 @@ class MatchedNewsItem(BaseModel):
     job_category: str = ""
     published_at: Optional[datetime] = None
     url: str = ""
-    distance: float = 0.0   # 벡터 코사인 거리 0.0~1.0 (낮을수록 유사)
-                             # distance=0.0 → 키워드 매칭 전용 (벡터 거리 없음)
+    distance: float = 0.0    # 벡터 코사인 거리. 0.0 = 키워드 전용 매칭
 
-class SWOTList(BaseModel):           # 지원자 관점 SWOT — List[str] 필드
+class SWOTList(BaseModel):   # 지원자 관점 SWOT — List[str] 필드
     strengths: List[str] = []
     weaknesses: List[str] = []
     opportunities: List[str] = []
@@ -269,79 +328,100 @@ class ReportResponse(BaseModel):
     final_report: str = ""
 ```
 
-### 내부 서비스 모델
+---
 
-```python
-class SWOT(BaseModel):               # 기업 분석용 — string 필드
-    strengths: str = ""
-    weaknesses: str = ""
-    opportunities: str = ""
-    threats: str = ""
+## 5. 파이프라인 단계 (워커 내부)
 
-class IndustryData(BaseModel):
-    industry: str
-    trends: List[str]
-    keywords: List[Keyword]
-    article_count: int
+```
+[1] PDF 파싱 — job 생성 시점에 완료 (progress_pct: 0→10 on worker pickup)
 
-class CompanyAnalysis(BaseModel):
-    company: str
-    industry: str
-    analysis_date: datetime
-    swot: SWOT
-    interview_qna: List[InterviewQNA]
-    article_count: int
-    news_sources: List[CompanyNewsArticle]
+[2+3] 자소서 분석 + 쿼리 최적화 — 병렬 (Claude Haiku)
+    analyze_resume()   → skills, experience_keywords, target_role, strengths
+    transform_query()  → 뉴스 검색 최적화 쿼리
+    완료 시 progress_pct: 25 → 30
 
-class ResumeAnalysis(BaseModel):
-    skills: List[str] = []
-    experience_keywords: List[str] = []
-    target_role: Optional[str] = None
-    strengths: List[str] = []
-    search_keywords: List[str] = []
+[4] 하이브리드 검색
+    hybrid_search(query, keyword_query, top_k=15)
+    → 벡터(pgvector cosine) ‖ 키워드(pg_trgm) 병렬 → RRF(k=60) → Top 15
+    완료 시 progress_pct: 55
+    ※ Cross-Encoder 리랭킹은 ENABLE_RERANKER=true 시 활성화 (기본 비활성)
+
+[5] SWOT + 산업 연관성 분석 — 병렬 (Claude Sonnet)
+    generate_swot_list(resume, company, job_title, chunks, industry, career_level)
+    generate_relevance_analysis(resume, chunks, company, industry, job_title, career_level)
+    완료 시 progress_pct: 80
+
+[6] 최종 리포트 생성 (Claude Sonnet)
+    generate_final_report(resume, company, job_title, industry, swot, relevance_analysis, career_level)
+    완료 시 progress_pct: 100
+
+[7] DB 저장 — analysis_reports 저장 + job.report_id 연결
+```
+
+### LLM 출력 형식
+
+**`generate_relevance_analysis`** — 고정 템플릿 markdown:
+```
+### 산업 트렌드 요약
+- [트렌드 1]
+- [트렌드 2]
+- [트렌드 3]
+
+### 역량-트렌드 연결 포인트
+- **[역량명]** — [연결 설명]
+- **[역량명]** — [연결 설명]
+- **[역량명]** — [연결 설명]
+
+### 면접 활용 키워드
+- **[키워드]**: [활용법]
+- **[키워드]**: [활용법]
+- **[키워드]**: [활용법]
+```
+규칙: 각 섹션 정확히 3개 불릿 / 섹션 외 서문·결론 금지 / `###` 헤딩 문자열 정확히 유지
+
+**`generate_final_report`** — 고정 템플릿 markdown:
+```
+## 면접 준비 포인트
+
+### Q1. [예상 질문]
+[배경 1문장]
+**핵심 답변 방향:** [2~3문장]
+
+### Q2. [예상 질문]
+...
+
+### Q3. [예상 질문]
+...
+
+---
+
+## 최종 권고사항
+
+### 핵심 준비 사항
+1. **[항목명]** — [실행 방법]
+2. **[항목명]** — [실행 방법]
+3. **[항목명]** — [실행 방법]
+
+### 차별화 전략
+[지원자만의 차별점 2~3문장]
 ```
 
 ---
 
-## 4. LLM 서비스 메서드 (`app/services/llm_service.py`)
-
-### 프론트 파이프라인용 메서드
-
-| 메서드 | 모델 | 반환 타입 | 설명 |
-|---|---|---|---|
-| `analyze_resume(text)` | Claude Haiku | `dict` | 자소서 구조화 |
-| `transform_query(text)` | Claude Haiku | `dict` | 검색 쿼리 최적화 |
-| `generate_swot_list(resume, company, job_title, chunks, industry, career_level)` | Claude Sonnet | `Dict[str, List[str]]` | 지원자 관점 SWOT — career_level 반영 |
-| `generate_relevance_analysis(resume, chunks, company, industry, job_title, career_level)` | Claude Sonnet | `str` (markdown) | 역량-트렌드 연관성 분석 — career_level 반영 |
-| `generate_final_report(resume, company, job_title, industry, swot, relevance_analysis, career_level)` | Claude Sonnet | `str` (markdown) | 고정 템플릿 면접 준비 리포트 — career_level 반영 |
-
-### 내부 서비스 메서드
-
-| 메서드 | 설명 |
-|---|---|
-| `extract_trends(articles, industry)` | 산업 트렌드 3문장 추출 |
-| `extract_keywords(articles)` | 키워드 리스트 추출 |
-| `generate_swot_analysis(company, articles)` | 기업 SWOT (string 필드) |
-| `generate_interview_questions(company, resume, articles)` | 면접 Q&A 생성 |
-| `stream_industry_trends(articles, industry)` | SSE 스트리밍 |
-| `stream_swot(company, articles)` | SSE 스트리밍 |
-
----
-
-## 5. CORS 설정
+## 6. CORS 설정
 
 ```env
-# .env
 ALLOWED_ORIGINS=["http://localhost:3000","http://localhost:5173"]
 ```
 
 ---
 
-## 6. 성능 목표
+## 7. 성능 목표
 
 | 단계 | 목표 |
 |---|---|
-| 전체 `/report` 응답 | < 30초 |
+| 전체 Job 완료 (생성~완료) | < 60초 |
 | PDF 파싱 + 자소서 분석 | < 5초 |
 | 하이브리드 검색 | < 3초 |
-| 병렬 LLM 분석 (2개 동시) | < 20초 |
+| 병렬 LLM 분석 (SWOT + 연관성) | < 20초 |
+| 최종 리포트 생성 | < 15초 |

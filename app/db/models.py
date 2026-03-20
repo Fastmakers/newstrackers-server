@@ -104,10 +104,12 @@ class AnalysisJobDB(Base):
     resume_text: Mapped[Optional[str]] = mapped_column(Text)
 
     # 진행 상황
-    current_step: Mapped[Optional[int]] = mapped_column(Integer)
-    step_label: Mapped[Optional[str]] = mapped_column(Text)   # 단계 표시 문자열
-    step_detail: Mapped[Optional[str]] = mapped_column(Text)  # 상세 메시지
     progress_pct: Mapped[int] = mapped_column(Integer, default=0)
+    retry_count: Mapped[int] = mapped_column(Integer, default=0)
+    partial_result: Mapped[dict] = mapped_column(JSONB, default=dict, server_default="{}")
+    report_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("analysis_reports.id", ondelete="SET NULL"), nullable=True
+    )
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     started_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
@@ -115,13 +117,14 @@ class AnalysisJobDB(Base):
     error_msg: Mapped[Optional[str]] = mapped_column(Text)
 
     report: Mapped[Optional["AnalysisReportDB"]] = relationship(
-        "AnalysisReportDB", back_populates="job", uselist=False, lazy="noload"
+        "AnalysisReportDB", foreign_keys=[report_id], lazy="noload"
     )
 
     __table_args__ = (
         Index("idx_jobs_user_id", "user_id"),
-        Index("idx_jobs_status", "status"),
-        Index("idx_jobs_created_at", "created_at"),
+        # claim_pending_jobs 쿼리: WHERE status='pending' ORDER BY created_at
+        # 복합 인덱스로 필터 + 정렬을 단일 스캔에 처리 (FOR UPDATE SKIP LOCKED 성능)
+        Index("idx_jobs_status_created_at", "status", "created_at"),
     )
 
 
@@ -131,9 +134,6 @@ class AnalysisReportDB(Base):
     __tablename__ = "analysis_reports"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    job_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("analysis_jobs.id", ondelete="CASCADE"), unique=True
-    )
     user_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), nullable=True)
 
     # ReportResponse 필드
@@ -146,9 +146,6 @@ class AnalysisReportDB(Base):
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
-    job: Mapped["AnalysisJobDB"] = relationship(
-        "AnalysisJobDB", back_populates="report", lazy="noload"
-    )
 
     __table_args__ = (
         Index("idx_reports_user_id", "user_id"),

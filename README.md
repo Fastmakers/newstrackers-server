@@ -1,30 +1,29 @@
-# NewStrackers AI
+# 📰 NewStrackers AI Server
 
-자소서(Internal Context)와 뉴스(External Context)를 결합해 산업 분석과 기업 면접 준비를 지원하는 AI 서버입니다.
+자소서(PDF)와 지원 직무 정보를 기반으로 산업 뉴스를 매칭하고, RAG 기반 SWOT 분석과 면접 준비 리포트를 생성하는 FastAPI 서버입니다.
 
 ## 핵심 기능
 
-- **산업 분석**: 뉴스 기반 트렌드, 키워드, 월별 감정 분석, 출처 통계
-- **기업 분석**: 5대 지표 레이더, SWOT, 최신 뉴스 테마, 리스크 평가
-- **자소서 분석**: PDF/DOCX 업로드 → 스킬·강점·키워드 추출
-- **기업 면접 준비**: 자소서 + 기업 뉴스 기반 맞춤 면접 문항 생성
-- **벡터 검색**: pgvector 코사인 유사도로 의미 기반 기사 검색
+- **리포트 생성**: PDF 자소서 + 지원 기업/직무/산업 → 뉴스 매칭 → SWOT + 최종 리포트 (비동기 Job)
+- **뉴스 매칭**: pgvector 코사인 유사도 + pg_trgm 키워드 검색 → RRF 융합 + Cross-Encoder 재순위
+- **비동기 Job 시스템**: PDF 업로드 즉시 job_id 반환 → 백그라운드 워커 처리 → 폴링으로 점진적 결과 수신
+- **인증**: JWT Bearer 토큰 (선택적 — 비로그인 상태에서도 분석 가능)
 
 ## 기술 스택
 
-| 분류 | 기술 |
-|------|------|
-| 언어 / 프레임워크 | Python 3.12, FastAPI |
-| LLM | Anthropic Claude (`claude-sonnet-4-6`) |
-| 임베딩 | OpenAI `text-embedding-3-small` (1536차원) |
-| DB | PostgreSQL (AWS RDS) + pgvector |
-| AI 파이프라인 | LangGraph (병렬 노드 실행) |
-| 테스트 | Pytest |
+| 분류              | 기술                                                        |
+| ----------------- | ----------------------------------------------------------- |
+| 언어 / 프레임워크 | Python 3.12, FastAPI                                        |
+| LLM               | Anthropic Claude (`claude-sonnet-4-6` / `claude-haiku-4-5`) |
+| 임베딩            | OpenAI `text-embedding-3-small` (1536차원)                  |
+| DB                | PostgreSQL + pgvector + pg_trgm                             |
+| 비동기 처리       | asyncio 기반 백그라운드 워커 (최대 3 동시 처리)             |
+| 테스트            | Pytest                                                      |
 
 ## 설치
 
 ```bash
-git clone https://github.com/yourusername/newstrackers-server.git
+git clone <repo-url>
 cd newstrackers-server
 uv sync
 ```
@@ -35,148 +34,151 @@ uv sync
 cp .env.example .env
 ```
 
-| 변수 | 필수 | 설명 |
-|------|------|------|
-| `ANTHROPIC_API_KEY` | ✅ | Claude API 키 |
-| `OPENAI_API_KEY` | ✅ | 임베딩용 OpenAI 키 |
-| `DATABASE_URL` | ✅ | PostgreSQL 연결 문자열 |
-| `LOG_LEVEL` | - | 로그 레벨 (기본: `INFO`) |
+| 변수                | 필수 | 설명                     |
+| ------------------- | ---- | ------------------------ |
+| `DATABASE_URL`      | ✅    | PostgreSQL 연결 문자열   |
+| `ANTHROPIC_API_KEY` | ✅    | Claude API 키            |
+| `OPENAI_API_KEY`    | ✅    | 임베딩용 OpenAI 키       |
+| `JWT_SECRET`        | ✅    | JWT 서명 시크릿 키       |
+| `LOG_LEVEL`         | -    | 로그 레벨 (기본: `INFO`) |
 
 ```
 DATABASE_URL=postgresql://user:password@host:5432/dbname
 ```
 
+## DB 마이그레이션
+
+```bash
+alembic upgrade head   # 001 → 007 순서 자동 실행
+```
+
 ## 실행
 
 ```bash
-# FastAPI 서버
 uvicorn app.main:app --reload
-
-# Swagger UI
-open http://localhost:8000/docs
+# Swagger UI: http://localhost:8000/docs
 ```
+
+서버 시작 시 백그라운드 워커가 자동으로 함께 실행됩니다 (`app/main.py` lifespan).
 
 ## API 엔드포인트
 
 ### Health
 
-| Method | Path | 설명 |
-|--------|------|------|
-| GET | `/health` | 루트 헬스체크 |
-| GET | `/api/v1/health` | API v1 헬스체크 |
+| Method | Path             | 설명            |
+| ------ | ---------------- | --------------- |
+| GET    | `/health`        | 루트 헬스체크   |
+| GET    | `/api/v1/health` | API v1 헬스체크 |
 
-### 산업 분석
+### 인증 (`/api/v1/auth`)
 
-| Method | Path | 설명 |
-|--------|------|------|
-| POST | `/api/v1/analysis/industry` | 산업 트렌드 분석 |
-| GET | `/api/v1/analysis/graph/industry` | 분석 파이프라인 Mermaid 다이어그램 |
+| Method | Path                    | 설명                       |
+| ------ | ----------------------- | -------------------------- |
+| POST   | `/api/v1/auth/register` | 회원가입 → JWT 반환        |
+| POST   | `/api/v1/auth/login`    | 로그인 → JWT 반환          |
+| GET    | `/api/v1/auth/me`       | 내 정보 조회 (Bearer 필요) |
+
+### 분석 Job (`/api/v1/jobs`)
+
+| Method | Path                               | 설명                                           |
+| ------ | ---------------------------------- | ---------------------------------------------- |
+| POST   | `/api/v1/jobs`                     | 분석 Job 생성 (PDF 업로드, 즉시 `job_id` 반환) |
+| GET    | `/api/v1/jobs`                     | 내 Job 목록 조회                               |
+| GET    | `/api/v1/jobs/{job_id}`            | Job 상태 + 점진적 결과 폴링                    |
+| GET    | `/api/v1/jobs/reports`             | 완료된 리포트 목록                             |
+| GET    | `/api/v1/jobs/reports/{report_id}` | 리포트 상세 조회                               |
+
+#### Job 생성 예시
 
 ```bash
-curl -X POST http://localhost:8000/api/v1/analysis/industry \
-  -H "Content-Type: application/json" \
-  -d '{"industry": "반도체", "days_back": 365}'
-```
-
-### 기업 분석
-
-| Method | Path | Body | 설명 |
-|--------|------|------|------|
-| POST | `/api/v1/analysis/company` | JSON | 기업 분석 (자소서 텍스트) |
-| POST | `/api/v1/analysis/company/upload` | form-data | 기업 분석 (자소서 파일) |
-| GET | `/api/v1/analysis/graph/company` | - | 분석 파이프라인 Mermaid 다이어그램 |
-
-```bash
-# JSON 방식
-curl -X POST http://localhost:8000/api/v1/analysis/company \
-  -H "Content-Type: application/json" \
-  -d '{"company": "삼성전자", "industry": "반도체", "resume": "자소서 내용...", "days_back": 365}'
-
-# 파일 업로드 방식
-curl -X POST http://localhost:8000/api/v1/analysis/company/upload \
+curl -X POST http://localhost:8000/api/v1/jobs \
+  -F "file=@자소서.pdf" \
   -F "company=삼성전자" \
+  -F "job_title=SW개발" \
   -F "industry=반도체" \
-  -F "days_back=365" \
-  -F "file=@자소서.pdf"
+  -F "career_level=신입"
 ```
 
-### 자소서
+응답:
 
-| Method | Path | 설명 |
-|--------|------|------|
-| POST | `/api/v1/resume/parse` | PDF/DOCX에서 텍스트 추출 |
-| POST | `/api/v1/resume/analyze` | 텍스트 추출 + LLM 구조화 분석 |
+```json
+{
+  "job_id": "550e8400-...",
+  "status": "pending",
+  "message": "분석 Job이 생성되었습니다."
+}
+```
+
+#### 상태 폴링 예시
 
 ```bash
-curl -X POST http://localhost:8000/api/v1/resume/parse \
-  -F "file=@자소서.pdf"
+curl http://localhost:8000/api/v1/jobs/550e8400-...
 ```
 
-## LangGraph 파이프라인
+응답:
 
-### 산업 분석 그래프
-
-```
-fetch_articles
-     │
-     ├── extract_trends
-     ├── extract_keywords
-     ├── compute_monthly_sentiment
-     └── compute_source_stats
-              │
-         assemble_result
+```json
+{
+  "job_id": "550e8400-...",
+  "status": "running",
+  "progress_pct": 55,
+  "partial_result": { "matched_news": [...] },
+  "report_id": null
+}
 ```
 
-### 기업 분석 그래프 (2단계 병렬)
+#### Job 상태 전이
 
 ```
-Step 1 (병렬):  fetch_articles  ||  analyze_resume
-                        └──── sync barrier ────┘
-                                    │
-Step 2 (병렬):  generate_swot  ||  generate_interview_questions
-             ||  score_dimensions  ||  extract_themes
-             ||  assess_risks      ||  extract_company_info
-                        └──────────────────┘
-                              assemble_result
+pending ──► running ──► completed
+                   └──► failed
 ```
-
-GET `/api/v1/analysis/graph/industry` 또는 `/company` 로 현재 그래프 구조를 Mermaid 형식으로 실시간 확인 가능.
 
 ## 프로젝트 구조
 
 ```
 app/
-  agents/
-    graphs/          # LangGraph 파이프라인 (industry_graph, company_graph)
-    nodes/           # 그래프 노드 (fetch_nodes, llm_nodes, analysis_nodes)
-    state.py         # LangGraph 상태 타입 정의
-  analysis/
-    industry_analyzer.py   # 산업 분석기 (그래프 실행)
-    company_analyzer.py    # 기업 분석기 (그래프 실행)
+  main.py                  # FastAPI 앱 진입점 + 워커 lifespan
   api/v1/
+    router.py              # health / auth / jobs 라우터 통합
     endpoints/
-      analysis.py    # 산업/기업 분석 엔드포인트
-      resume.py      # 자소서 업로드/분석 엔드포인트
-      health.py      # 헬스체크
-    router.py
+      health.py            # 헬스체크
+      auth.py              # 회원가입 / 로그인 / 내 정보
+      jobs.py              # Job 생성 / 조회 / 리포트
   core/
-    config.py        # 환경 변수 (pydantic-settings)
-    dependencies.py  # FastAPI DI 프로바이더
-    constants.py     # 상수
+    config.py              # 환경 변수 (pydantic-settings)
+    dependencies.py        # DI 프로바이더 (싱글턴)
+    auth.py                # JWT 검증 (get_optional_user_id)
+    security.py            # 비밀번호 해싱, 토큰 생성
   db/
-    base.py          # SQLAlchemy 엔진/세션
-    models.py        # news_article_embeddings 테이블 모델
+    base.py                # SQLAlchemy 엔진 / 세션
+    models.py              # AnalysisJobDB, AnalysisReportDB, NewsArticleDB, NewsChunkDB
+    user_models.py         # UserDB
+    repositories/
+      job_repository.py    # Job / Report CRUD
+      news_repository.py   # 하이브리드 검색 쿼리
   schemas/
-    data_models.py   # Pydantic 응답 모델
+    data_models.py         # ResumeProfile, MatchedNewsItem, SWOTList, ReportResponse
+    job_models.py          # JobCreateResponse, JobStatusResponse, ReportDetailResponse
+    user.py                # UserRegister, UserLogin, TokenResponse
   services/
-    news_service.py  # DB 조회, 벡터 검색
-    llm_service.py   # Claude API 호출
-    data_loader.py   # AI Hub 데이터 로드 + OpenAI 임베딩 생성
-  main.py            # FastAPI 앱 진입점
+    report_pipeline.py     # ReportPipeline — 전체 분석 파이프라인 조율
+    resume_analyzer.py     # PDF 파싱 + Haiku 기반 이력서 구조화
+    report_generator.py    # Sonnet 기반 SWOT / 연관도 분석 / 최종 리포트 생성
+    llm_client.py          # Claude API 래퍼 (_call_claude, stream_text)
+    llm_service.py         # 하위 호환 파사드 + RAG 답변
+    news_service.py        # 벡터·키워드 하이브리드 검색 + 재순위
+    embedding_service.py   # OpenAI 임베딩 (text-embedding-3-small)
+    worker.py              # 비동기 Job 워커 (asyncio, 3초 폴링)
+    search/
+      rrf.py               # RRF 융합 (k=60)
+      reranker.py          # Cross-Encoder 재순위 (BAAI/bge-reranker-v2-m3)
+alembic/
+  versions/                # 001 ~ 007 마이그레이션
+docs/                      # 상세 설계 문서 (00~07)
 tests/
-  unit/              # 단위 테스트
-  integration/       # 통합 테스트
-  api/               # API 엔드포인트 테스트
+  unit/                    # 단위 테스트
+  integration/             # 통합 테스트
 ```
 
 ## 테스트
@@ -192,14 +194,16 @@ pytest tests/unit/ -v
 pytest --cov=app tests/
 ```
 
-## 데이터 로드
+## 상세 문서
 
-AI Hub 뉴스 데이터를 RDS에 적재할 때:
-
-```bash
-# 임베딩 포함 (OpenAI API 필요)
-python -m app.services.data_loader --input data/news.jsonl
-
-# 임베딩 제외 (빠른 적재)
-python -m app.services.data_loader --input data/news.jsonl --no-embed
-```
+| 파일                               | 내용                                                    |
+| ---------------------------------- | ------------------------------------------------------- |
+| `docs/00_system_architecture.md`   | 전체 시스템 설계 및 레이어 구조                         |
+| `docs/01_infra_env_spec.md`        | 환경 변수, DB 인덱스 전략                               |
+| `docs/02_search_pipeline_spec.md`  | 벡터·키워드 하이브리드 검색 (V1~V3), RRF, Cross-Encoder |
+| `docs/03_api_spec.md`              | API 엔드포인트 상세 명세                                |
+| `docs/04_benchmark_spec.md`        | 검색 파이프라인 성능 벤치마크 실험 (E1~E4)              |
+| `docs/05_report_jobs_spec.md`      | 비동기 Job 시스템, DB 스키마, 워커 동작                 |
+| `docs/ASYNC_JOB_SYSTEM.md`         | Job 시스템 구현 기록 — 흐름, DB, 엔드포인트 예시        |
+| `docs/ARCHITECTURE.md`             | 서비스 계층 리팩토링 기록 (Tier 1/2/3)                  |
+| `docs/PIPELINE.md`                 | 오프라인 뉴스 데이터 처리 파이프라인 (Phase 1~5)        |
