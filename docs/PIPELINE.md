@@ -33,10 +33,10 @@
         ▼
 ┌─────────────────────────────────────┐
 │  Phase 4. 하이브리드 검색 (실시간)    │  (사용자 쿼리 입력 시)
-│  - 벡터 검색 100건                   │
-│  + 키워드 검색 100건                 │
-│  → RRF 융합 → 100건                 │
-│  → [Cross-Encoder 리랭킹 미구현]     │
+│  - 쿼리 3개 병렬 생성                │
+│  - 벡터 검색 (pgvector) × 3         │
+│  + 키워드 검색 (pg_trgm) × 3        │
+│  → RRF 다중 융합 → top-15청크       │
 └─────────────────────────────────────┘
         │  top-K 청크
         ▼
@@ -197,30 +197,27 @@ python scripts/extract_ner.py --all --save
 
 사용자가 검색어를 입력하면 실시간으로 실행된다.
 
-### `NewsService.hybrid_search(query, category_l2, top_k)`
+### `NewsService.multi_hybrid_search(queries, keyword_query, top_k)`
+
+쿼리 3개를 ThreadPoolExecutor로 병렬 실행 후 RRF로 합산한다.
 
 ```
-사용자 쿼리
+쿼리 3개 (transform_query 결과)
     │
-    ├─── Stage 1A: 벡터 검색 (pgvector cosine distance)
-    │       embedding(query) <=> chunk.embedding
-    │       → 100건
+    ├─── [쿼리1] Stage 1A: 벡터 검색 (pgvector cosine)  → top-100
+    │            Stage 1B: 키워드 검색 (pg_trgm)        → top-100
+    │            → RRF 융합 → 100건
     │
-    ├─── Stage 1B: 키워드 검색 (ILIKE)
-    │       chunk_text ILIKE '%query%'
-    │       → 100건
+    ├─── [쿼리2] 동일                                   → 100건
+    │
+    ├─── [쿼리3] 동일                                   → 100건
     │
     ▼
-    Stage 2: RRF 융합 (app/services/search/rrf.py)
+    rrf_fuse_multi(3개 결과)  — app/services/search/rrf.py
         score(d) = Σ 1/(k=60 + rank_i)
-        → 100건 (두 결과의 순위 기반 점수 합산)
     │
     ▼
-    Stage 3: Cross-Encoder 리랭킹 [미구현]
-        BAAI/bge-reranker-m3
-    │
-    ▼
-    top_k 청크 반환
+    top_k 청크 반환 (기본 15건)
 ```
 
 **관련 파일:**
@@ -234,26 +231,6 @@ python scripts/extract_ner.py --all --save
 
 검색된 청크를 컨텍스트로 Claude에게 분석을 요청한다.
 모든 LLM 호출은 `app/services/llm_service.py` (`LLMService`) 에서 처리한다.
-
-### 산업 분석 — Pipeline A (`/analysis/industry`)
-
-```
-hybrid_search 결과 (뉴스 청크)
-    │
-    ├─ extract_trends(articles, industry)    → 트렌드 3문장 (Claude Sonnet)
-    └─ extract_keywords(articles)            → [{word, type, weight}] (Claude Sonnet)
-        → IndustryData 반환
-```
-
-### 기업 분석 — Pipeline B (`/analysis/company`)
-
-```
-hybrid_search 결과 (뉴스 청크)
-    │
-    ├─ generate_swot_analysis(company, articles)       → SWOT string (Claude Sonnet)
-    └─ generate_interview_questions(company, resume, articles) → Q&A 리스트 (Claude Sonnet)
-        → CompanyAnalysis 반환
-```
 
 ### 종합 리포트 — Pipeline E (`POST /jobs` → Worker → `ReportPipeline.run_with_progress`)
 
@@ -309,67 +286,3 @@ ReportResponse 조립 → DB 저장 (analysis_reports)
 
 **LLM 모델:** `claude-sonnet-4-6` (분석), `claude-haiku-4-5` (빠른 전처리)
 
----
-
-## 아키텍처 레이어 요약
-
-```
-사용자 요청
-    │
-    ▼
-FastAPI (app/api/v1/endpoints/)
-    │
-    ▼
-Service Layer (app/services/)
-    ├── NewsService        — 뉴스 검색 (hybrid_search)
-    └── LLMService         — Claude API 호출 + SSE 스트리밍
-    │
-    ▼
-Analysis Layer (app/analysis/) — 오프라인 배치 전용
-    ├── LexicalDiversityAnalyzer — 데이터 품질 (LogTTR)
-    ├── NgramExtractor     — TF-IDF 키워드
-    ├── NerExtractor       — NER/POS
-    └── TextCleaner        — 텍스트 정제
-    │
-    ▼
-Repository Layer (app/db/repositories/)
-    └── NewsRepository     — SQL 쿼리 캡슐화
-    │
-    ▼
-DB Layer (app/db/)
-    ├── models.py          — SQLAlchemy ORM
-    └── adapters/          — DB Row → Domain 변환
-    │
-    ▼
-PostgreSQL (AWS RDS)
-    ├── news_articles      — 188,379건
-    └── news_chunks        — 335,073건 (pgvector)
-```
-
----
-
-## 파일 목록
-
-### 오프라인 배치 (Phase 1~3)
-
-| 파일 | 역할 |
-|---|---|
-| `app/analysis/text_cleaner.py` | Regex 노이즈 제거 |
-| `app/analysis/lexical_diversity.py` | LogTTR 노이즈 탐지 |
-| `app/analysis/ngram_extractor.py` | TF-IDF N-gram 키워드 |
-| `app/analysis/ner_extractor.py` | NER + POS 동사 추출 |
-| `scripts/analyze_lexical_diversity.py` | LogTTR 배치 분석 |
-| `scripts/extract_ngrams.py` | TF-IDF 배치 추출 |
-| `scripts/extract_ner.py` | NER 배치 추출 |
-| `data/lexical_diversity.json` | 노이즈 기사 ID 목록 |
-| `data/ngrams.json` | 카테고리별 키워드 |
-| `data/ner_result.json` | ORG·PERSON·LOC·동사 |
-
-### 실시간 API (Phase 4~5)
-
-| 파일 | 역할 |
-|---|---|
-| `app/services/news_service.py` | 하이브리드 검색 (V1/V2/V3) |
-| `app/services/llm_service.py` | Claude API 호출 전체 |
-| `app/services/search/rrf.py` | RRF 융합 (k=60) |
-| `app/db/repositories/news_repository.py` | DB 쿼리 (vector/trgm) |
